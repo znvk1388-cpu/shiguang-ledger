@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f5f7">
+<meta name="description" content="拾光记账 · 随手记收支，看清预算与结余。支持本机记账、图片凭证和账号云端同步。">
+<!-- 小程序 web-view / 微信内置浏览器：禁止把数字串识别成电话号码，避免误弹拨号 -->
+<meta name="format-detection" content="telephone=no,email=no,address=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="拾光记账">
+<title>拾光记账</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/product.css">
+<!-- ============ 首屏兜底（v4 评审 缺陷 1）============
+     托管平台会在 </head> 之前注入一个**同步**的外部统计脚本
+     （https://beacon.cdn.qq.com/sdk/…/beacon_web.min.js）。它慢的时候会阻塞
+     HTML 解析，页面停在纯白（评审实测 9 秒，readyState=interactive 但 body 为空）。
+     那个脚本不归我们管，改不了 async/defer、也没法挪到隐私同意之后，
+     所以在它前面先装一个看门狗：3 秒还没进主应用就把「正在加载」骨架换上。
+     解析被阻塞时定时器照样会触发，所以这个兜底真的能生效。
+     app.js 启动成功后调 window.__sgBootClear() 把它撤掉。
+     样式内联在这里而不是 app.css：兜底必须不依赖任何额外请求。 -->
+<style>
+#bootFallback{position:fixed;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#f4f5f7;font:14px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;color:#7c8598;text-align:center;padding:24px}
+#bootFallback b{font-size:17px;color:#2b3242;font-weight:600}
+#bootFallback i{width:26px;height:26px;border-radius:50%;border:2.5px solid #d7dce6;border-top-color:#2f6bff;animation:bootSpin .8s linear infinite}
+@keyframes bootSpin{to{transform:rotate(360deg)}}
+html[data-theme="dark"] #bootFallback{background:#14171d;color:#8b93a3}
+html[data-theme="dark"] #bootFallback b{color:#e6e9ef}
+html[data-theme="dark"] #bootFallback i{border-color:#2b303a;border-top-color:#6f9dff}
+</style>
+<script>
+(function () {
+  var t = setTimeout(function () {
+    if (window.__sgBooted || document.getElementById('bootFallback')) return
+    var d = document.createElement('div')
+    d.id = 'bootFallback'
+    d.innerHTML = '<i></i><b>拾光记账</b><span>正在加载，网络慢的话再等一下…</span>'
+    document.documentElement.appendChild(d)
+  }, 3000)
+  window.__sgBootClear = function () {
+    window.__sgBooted = true
+    clearTimeout(t)
+    var d = document.getElementById('bootFallback')
+    if (d && d.parentNode) d.parentNode.removeChild(d)
+  }
+})()
+</script>
+</head>
+<body>
+
+<noscript>
+  <div style="padding:40px 20px;text-align:center;font-family:system-ui,sans-serif">
+    <div style="font-size:44px"><svg class="sg-icon s24" aria-hidden="true"><use href="assets/icons.svg#sun"></use></svg></div>
+    <h1 style="font-size:20px">拾光记账</h1>
+    <p style="color:#7c8598;font-size:14px">需要开启 JavaScript 才能使用，请在浏览器设置中允许后刷新页面。</p>
+  </div>
+</noscript>
+
+<!-- ============ 登录 ============ -->
+<section id="authView" class="auth hidden">
+  <div class="auth-logo"><svg class="sg-icon s24" aria-hidden="true"><use href="assets/icons.svg#sun"></use></svg></div>
+  <h1>拾光记账</h1>
+  <p class="lead">记下每一笔，看清每一天。</p>
+
+  <div class="auth-start">
+    <button id="guestBtn" class="btn block">先记一笔 · 无需注册</button>
+    <p class="hint">先存本机，随时导出备份；登录后可迁移到云端。</p>
+  </div>
+
+  <!-- P1-12：隐私确认前移到登录页，勾选即同意；老用户已同意过则整行隐藏。
+       P0-4（终审）：整行用 <label> 包裹，点文字也能勾选；报错走行内红字，不用底部 toast -->
+  <label class="auth-consent" id="authConsent" for="consentChk">
+    <input type="checkbox" id="consentChk" aria-label="同意用户隐私保护指引与用户协议">
+    <span>我已阅读并同意<a href="javascript:void(0)" id="authPrivacyLink">《用户隐私保护指引》</a>与<a href="javascript:void(0)" id="authTermsLink">《用户协议》</a>；游客模式数据只存本机</span>
+  </label>
+  <div class="consent-err" id="consentErr" role="alert" hidden></div>
+
+  <div class="auth-card">
+    <div class="auth-card-title" id="authTitle" role="button" tabindex="0" aria-expanded="false" aria-controls="authForm">登录，跨设备继续记账<span class="auth-more">›</span></div>
+    <div id="authForm" class="collapsed">
+    <div class="seg" id="authTabs">
+      <button class="on" data-tab="phone">手机验证码</button>
+      <button data-tab="email">邮箱</button>
+    </div>
+
+    <!-- 手机号 -->
+    <div id="phonePane">
+      <div class="field">
+        <label for="phoneInput">手机号</label>
+        <input id="phoneInput" class="input" type="tel" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel">
+      </div>
+      <div class="field">
+        <label for="phoneCode">验证码</label>
+        <div class="row">
+          <input id="phoneCode" class="input grow" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">
+          <button id="phoneSend" class="btn ghost" style="flex:none;white-space:nowrap">获取验证码</button>
+        </div>
+      </div>
+      <div class="err" id="phoneErr" role="alert"></div>
+      <button id="phoneSubmit" class="btn block" style="margin-top:6px">登录 / 注册</button>
+    </div>
+
+    <!-- 邮箱 -->
+    <div id="emailPane" class="hidden">
+      <div class="field">
+        <label for="emailInput">邮箱</label>
+        <input id="emailInput" class="input" type="email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="emailCode">验证码（新用户需设置密码）</label>
+        <div class="row">
+          <input id="emailCode" class="input grow" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码">
+          <button id="emailSend" class="btn ghost" style="flex:none;white-space:nowrap">获取验证码</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="emailPwd">密码（仅新用户需要，≥6 位）</label>
+        <input id="emailPwd" class="input" type="password" placeholder="设置密码后可密码登录" autocomplete="new-password">
+      </div>
+      <div class="err" id="emailErr"></div>
+      <button id="emailSubmit" class="btn block" style="margin-top:6px">登录 / 注册</button>
+      <div class="divider">或</div>
+      <div class="row">
+        <input id="loginEmail" class="input grow" type="email" placeholder="邮箱" autocomplete="email">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="loginPwd" class="input grow" type="password" placeholder="密码" autocomplete="current-password">
+        <button id="pwdSubmit" class="btn line" style="flex:none">密码登录</button>
+      </div>
+      <div class="err" id="pwdErr"></div>
+    </div>
+
+    <div class="divider">其它方式</div>
+    <button id="wechatBtn" class="btn line block">微信登录</button>
+    <p class="hint">云端同步需要登录和联网。重要账目建议定期备份。</p>
+    </div>
+  </div>
+  <!-- 首屏脚注：折叠登录卡后下半屏是空的，用一行信任说明 + 版本号把空白补上 -->
+  <p class="auth-foot" id="authFoot"></p>
+</section>
+
+<!-- ============ 应用锁 ============ -->
+<section id="lockView" class="auth hidden">
+  <div class="auth-logo"><svg class="sg-icon s24" aria-hidden="true"><use href="assets/icons.svg#lock"></use></svg></div>
+  <h1>拾光记账</h1>
+  <p class="lead">输入 4 位 PIN 解锁</p>
+
+  <div class="auth-card">
+    <div class="field">
+      <label>PIN 码</label>
+      <input id="lockPin" class="input num" type="password" inputmode="numeric" maxlength="4"
+             placeholder="••••" autocomplete="off"
+             style="text-align:center;letter-spacing:10px;font-size:24px">
+    </div>
+    <div class="err" id="lockErr"></div>
+    <button id="lockSubmit" class="btn block" style="margin-top:6px">解锁</button>
+    <button id="lockForget" class="btn line block" style="margin-top:8px">忘记 PIN</button>
+    <p class="hint">PIN 只存在这台设备上，用于防止他人随手翻看，不是账号密码</p>
+  </div>
+</section>
+
+<!-- ============ 主应用 ============ -->
+<section id="mainView" class="hidden">
+  <div class="shell">
+    <div class="topbar">
+      <div class="period-bar">
+        <button class="book-btn" id="bookBtn" title="切换账本" aria-label="切换账本"><svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#book"></use></svg><span id="bookBtnName">日常</span></button>
+        <button class="period-btn" id="prevBtn" aria-label="上一期">‹</button>
+        <button class="grow" id="periodTitle" aria-label="选择期间" style="text-align:left"></button>
+        <button class="period-btn" id="nextBtn" aria-label="下一期">›</button>
+        <button class="btn sm line" id="scopeBtn" aria-label="切换统计范围" style="flex:none">月</button>
+        <button class="period-btn" id="privacyBtn" title="隐私模式" aria-label="隐私模式"><svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#eye"></use></svg></button>
+      </div>
+    </div>
+    <div id="updateBar"></div>
+    <div id="guestBanner"></div>
+    <!-- .sg-aside：宽屏下把「概览卡 + 今日/常用分类」绑成左栏一列 -->
+    <div class="sg-aside">
+      <div id="overview"></div>
+      <div id="productHome"></div>
+    </div>
+    <div id="content"></div>
+    <div class="fab-space"></div>
+  </div>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tab on" data-tab="home" aria-label="明细"><span class="ic"><svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#notebook"></use></svg></span><span>明细</span></button>
+    <button class="tab" data-tab="stats" aria-label="统计"><span class="ic"><svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#chart-bar"></use></svg></span><span>统计</span></button>
+    <button class="tab mid" data-tab="add" aria-label="记一笔"><span class="ic">＋</span></button>
+    <button class="tab" data-tab="assets" aria-label="资产"><span class="ic"><svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#wallet"></use></svg></span><span>资产</span></button>
+    <button class="tab" data-tab="me" aria-label="我的"><span class="ic"><svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#settings"></use></svg></span><span>我的</span></button>
+  </nav>
+</section>
+
+<div class="mask" id="mask"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-hidden="true" tabindex="-1" inert></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="lightboxRoot"></div>
+<div id="printArea"></div>
+
+<script defer src="js/vendor/workbuddy-cloud-sdk.js"></script>
+<script defer src="js/config.js"></script>
+<script defer src="js/env.js"></script>
+<script defer src="js/cloud.js"></script>
+<script defer src="js/format.js"></script>
+<script defer src="js/idb.js"></script>
+<script defer src="js/store.js"></script>
+<script defer src="js/guest-store.js"></script>
+<script defer src="js/db.js"></script>
+<script defer src="js/sync.js"></script>
+<script defer src="js/lazy.js"></script>
+<!-- papaparse / csv 不占首屏：仅在点「导入 CSV / 导出 CSV」时由 Lazy.csv() 按需加载，
+     逾期占用约 9.7KB(gzip) 首屏预算，已改为懒加载（SW 预缓存，断网可用） -->
+<!-- 以下模块不占首屏关键路径，由 js/lazy.js 空闲预取，用到时再等它就绪：
+     smart 规则引擎/AI 转发 · charts 统计图表 · wealth 借贷/信用卡/预算/对账 · insight 报表/出图
+     · share 共享账本（#sg= 会提前拉） · vault 加密备份 · sync-sheet 数据与同步面板
+     · ai AI 记账 · ask AI 问账 · migrate 游客数据迁移 -->
+<script defer src="js/ui.js"></script>
+<script defer src="js/product.js"></script>
+<script defer src="js/app.js"></script>
+</body>
+</html>
