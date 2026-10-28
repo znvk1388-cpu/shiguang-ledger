@@ -11,8 +11,7 @@
      加密后放到 shared/<ownerUid>/ledger10/<sid>.json；
    - 家人凭共享码下载、解密、按「账本 + 分类 + 账户」名称对齐后合并进自己
      的账目（按指纹去重，可反复刷新）。
-   SG1 的文件名包含密钥派生所需的 sid；共享目录的列举/读取权限仍需服务端验证。
-   后续协议应将对象标识与仅随共享码传递的随机 secret 分离。
+   新共享使用 SG2，密钥与文件名独立；SG1 仅为兼容旧共享保留。
    只有登录用户能用；游客模式给出「需先登录」提示。
    --------------------------------------------------------------- */
 window.Share = (function () {
@@ -25,7 +24,6 @@ window.Share = (function () {
   const SEEN_KEY = 'ledger10_share_seen'   /* 已合并过的交易指纹，防重复导入 */
   const SEEN_MAX = 8000
   const REL_DIR = 'ledger10'
-  const CODE_VER = 'SG1'
   const ITER = 150000
 
   /* ---------------- 小工具 ---------------- */
@@ -65,19 +63,21 @@ window.Share = (function () {
   }
 
   /* ---------------- 共享码 ---------------- */
-  /* 格式：SG1-<ownerUid>-<sid>。ownerUid 决定存储路径，sid 既是文件名也是密钥来源。 */
-  function buildCode(uid, sid) { return CODE_VER + '-' + uid + '-' + sid }
+  /* SG2 的 secret 仅在共享码中传递，绝不进入对象路径。 */
+  function buildCode(uid, sid, secret) { return (secret ? 'SG2-' : 'SG1-') + uid + '-' + sid + (secret ? '-' + secret : '') }
   function parseCode(raw) {
     const s = String(raw || '').trim().replace(/\s+/g, '')
     if (!s) return null
+    const modern = /^SG2-(.+)-([a-z0-9]{8,32})-([a-f0-9]{64})$/i.exec(s)
+    if (modern) return { uid: modern[1], sid: modern[2].toLowerCase(), secret: modern[3].toLowerCase(), version: 2 }
     const m = /^SG1-(.+)-([a-z0-9]{8,32})$/i.exec(s)
     if (!m) return null
-    return { uid: m[1], sid: m[2].toLowerCase() }
+    return { uid: m[1], sid: m[2].toLowerCase(), version: 1 }
   }
   function fmtCode(code) {
     const p = parseCode(code)
     if (!p) return code
-    return CODE_VER + ' · ' + p.uid + ' · ' + p.sid
+    return 'SG' + p.version + ' · ' + p.uid + ' · ' + p.sid + (p.secret ? ' · ' + p.secret : '')
   }
 
   /* ---------------- 加解密 ---------------- */
@@ -88,17 +88,26 @@ window.Share = (function () {
         { name: 'PBKDF2', salt: enc.encode('share:' + sid), iterations: ITER, hash: 'SHA-256' },
         base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']))
   }
-  async function encryptJson(obj, sid) {
-    const key = await deriveKey(sid)
+  function secretKey(secret) {
+    if (!/^[a-f0-9]{64}$/.test(secret || '')) throw new Error('共享密钥无效')
+    const bytes = new Uint8Array(secret.match(/../g).map(x => parseInt(x, 16)))
+    return crypto.subtle.importKey('raw', bytes, 'AES-GCM', false, ['encrypt', 'decrypt'])
+  }
+  function newSecret() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2, '0')).join('')
+  }
+  async function encryptJson(obj, sid, secret) {
+    const key = secret ? await secretKey(secret) : await deriveKey(sid)
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const data = new TextEncoder().encode(JSON.stringify(obj))
     const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data)
-    return JSON.stringify({ v: 1, iv: b64url(iv), d: b64url(new Uint8Array(buf)) })
+    return JSON.stringify({ v: secret ? 2 : 1, iv: b64url(iv), d: b64url(new Uint8Array(buf)) })
   }
-  async function decryptJson(text, sid) {
+  async function decryptJson(text, sid, secret) {
     const box = JSON.parse(text)
     if (!box || !box.iv || !box.d) throw new Error('数据格式不正确')
-    const key = await deriveKey(sid)
+    if ((box.v === 2) !== !!secret || (box.v !== 1 && box.v !== 2)) throw new Error('共享码版本不匹配')
+    const key = secret ? await secretKey(secret) : await deriveKey(sid)
     const plain = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: unb64url(box.iv) }, key, unb64url(box.d))
     return JSON.parse(new TextDecoder().decode(plain))
@@ -174,7 +183,11 @@ window.Share = (function () {
     const o = opts || {}
     const onlyBook = scope === 'book' && S().state.bookId != null
     const bookId = S().state.bookId
-    const rows = (await S().listTransactions({ limit: 100000, ignoreBook: true })).rows || []
+    const result = await S().listTransactions({ limit: 100000, ignoreBook: true })
+    if (!result || !Array.isArray(result.rows) || (Number.isFinite(result.total) && result.total > result.rows.length)) {
+      throw new Error('账目读取不完整或数量过多，未生成快照')
+    }
+    const rows = result.rows
     const keep = onlyBook ? rows.filter(t => String(t.book_id) === String(bookId)) : rows
     /* 账户按账本投影：只发这个账本的流水真正用到的账户 */
     let accs = S().allAccounts()
@@ -281,6 +294,11 @@ window.Share = (function () {
     if (!st) return { error: '云存储不可用，请检查网络' }
 
     const sid = o.sid || randStr(12)
+    const previous = o.sid ? myShares().find(x => x.sid === sid) : null
+    const previousCode = previous && parseCode(previous.code)
+    if (o.sid && (!previousCode || previousCode.uid !== String(sess.user.id))) return { error: '找不到当前账号的共享码，无法安全更新' }
+    const secret = previousCode ? previousCode.secret : newSecret()
+    const code = buildCode(sess.user.id, sid, secret)
     const label = (o.label || '共享账本').slice(0, 20)
     U().toast('正在生成加密快照…')
     let snap
@@ -288,24 +306,22 @@ window.Share = (function () {
     if (!snap.transactions.length) return { error: '当前范围里还没有账目，先记几笔再共享' }
 
     let payload
-    try { payload = await encryptJson(snap, sid) } catch (e) { return { error: '加密失败：' + (e.message || '') } }
+    try { payload = await encryptJson(snap, sid, secret) } catch (e) { return { error: '加密失败：' + (e.message || '') } }
     if (payload.length > 12 * 1024 * 1024) return { error: '账目太多（' + snap.transactions.length + ' 笔），单次共享上限约 12MB' }
 
-    const path = sharePath(sess.user.id, sid)
-    try {
-      const up = await st.upload(path, new Blob([payload], { type: 'application/json' }), { contentType: 'application/json', upsert: true })
-      if (up && up.error) return { error: up.error.message || '上传失败' }
-    } catch (e) { return { error: (e && e.message) || '上传失败，请检查网络' } }
-
-    const code = buildCode(sess.user.id, sid)
-    const list = myShares().filter(x => x.sid !== sid)
+    const original = myShares()
+    const list = original.filter(x => x.sid !== sid)
     list.unshift({
       sid: sid, code: code, label: label, scope: o.scope || 'all',
-      /* 记住这次的勾选，「更新」时用同一套设置，不会悄悄改变发出去的内容 */
       inc: o.include || null,
       at: new Date().toISOString(), count: snap.transactions.length, bytes: payload.length,
     })
-    saveMyShares(list)
+    if (!saveMyShares(list)) return { error: '无法保存共享码，请检查本机存储空间后重试' }
+    const path = sharePath(sess.user.id, sid)
+    try {
+      const up = await st.upload(path, new Blob([payload], { type: 'application/json' }), { contentType: 'application/json', upsert: true })
+      if (up && up.error) return { error: up.error.message || '上传失败；共享码已保存在本机，可重试更新' }
+    } catch (e) { return { error: ((e && e.message) || '上传失败，请检查网络') + '；共享码已保存在本机，可重试更新' } }
     return { ok: true, code: code, sid: sid, count: snap.transactions.length, bytes: payload.length }
   }
 
@@ -339,7 +355,7 @@ window.Share = (function () {
       text = await blob.text()
     } catch (e) { return { error: (e && e.message) || '下载失败，请检查网络' } }
     try {
-      const snap = await decryptJson(text, p.sid)
+      const snap = await decryptJson(text, p.sid, p.secret)
       return { ok: true, snap: snap, sid: p.sid, uid: p.uid }
     } catch (e) {
       return { error: '解密失败：共享码可能被改动过，请让账本主重新发一次' }
@@ -679,7 +695,7 @@ window.Share = (function () {
     /* 记录到「我加入的」 */
     const joins = joinedShares().filter(x => x.sid !== sid)
     joins.unshift({
-      sid: sid, code: buildCode(uid, sid), label: bookName,
+      sid: sid, code: (opts && opts.shareCode) || ((joinedShares().find(x => x.sid === sid && parseCode(x.code) && parseCode(x.code).uid === uid) || {}).code) || buildCode(uid, sid), label: bookName,
       at: new Date().toISOString(), lastAt: new Date().toISOString(),
       count: (snap.transactions || []).length,
     })
@@ -693,8 +709,7 @@ window.Share = (function () {
     const joins = joinedShares()
     const ok = cryptoOk()
     let html = '<div class="sheet-head"><span class="sheet-title">共享账本</span><button id="shClose" class="btn sm line">关闭</button></div>'
-    html += '<div class="card"><div class="small muted">把账本加密后发给家人，对方凭共享码加入就能看到你的账目。' +
-      '数据以密文存放，只有拿到共享码的人才能解开。</div>' +
+    html += '<div class="card"><div class="small muted">把账本加密后发给家人，对方凭共享码加入。新共享码包含密钥，请妥善保管；旧 SG1 共享的密钥可由对象标识推导，建议撤回后重新发布。</div>' +
       '<div class="small muted" style="margin-top:6px">当前为<b>单向共享</b>：你发布、对方订阅并随时刷新；' +
       '对方的新账目不会自动回到你这边。</div></div>'
 
@@ -829,8 +844,7 @@ window.Share = (function () {
       '<input type="checkbox" id="pubOtherBook" style="width:20px;height:20px;flex:none"> 包含其他账本的名称</label>' +
       '<div class="card"><div class="small muted" id="pubPrev">正在估算…</div></div>' +
       '</div>' +
-      '<div class="card"><div class="small muted">快照会先用共享码派生的密钥加密，再上传到云端共享区。' +
-      '对方需要完整共享码才能解开，其他人只能看到密文。</div></div>' +
+      '<div class="card"><div class="small muted">新共享使用随机密钥加密，密钥包含在共享码里；请仅发给信任的人。旧 SG1 共享仍需撤回后重新发布才能使用新密钥。</div></div>' +
       '<div class="err" id="pubErr"></div>' +
       '<button class="btn block" id="pubGo">生成并上传</button>'
     )
@@ -898,7 +912,7 @@ window.Share = (function () {
       '<div class="small muted" style="margin-bottom:10px">把家人给你的共享码粘贴到下面。加入后会保留来源账本归属，' +
       '可以随时回来「刷新」拉取最新。</div>' +
       '<div class="field"><label>共享码</label>' +
-      '<textarea id="jnCode" class="textarea" rows="3" placeholder="SG1-xxxxxxxx-xxxxxxxxxxxx">' + F.escapeHtml(prefill || '') + '</textarea></div>' +
+      '<textarea id="jnCode" class="textarea" rows="3" placeholder="粘贴 SG2 或旧版 SG1 共享码">' + F.escapeHtml(prefill || '') + '</textarea></div>' +
       '<div class="err" id="jnErr"></div>' +
       '<button class="btn block" id="jnGo">加入并导入</button>'
     )
@@ -999,7 +1013,7 @@ window.Share = (function () {
     const n = (r.snap.transactions || []).length
     U().toast('正在导入 ' + n + ' 笔…')
     let stats
-    try { stats = await mergeSnapshot(r.snap, label, r.sid, r.uid) } catch (e) { setErr('合并失败：' + (e.message || '')); return }
+    try { stats = await mergeSnapshot(r.snap, label, r.sid, r.uid, { shareCode: code }) } catch (e) { setErr('合并失败：' + (e.message || '')); return }
     if (r.snap && r.snap.balances === false) stats.noBalances = true
     if (window.App && window.App.refresh) window.App.refresh()
     lastJoin = { snap: r.snap, label: label, sid: r.sid, uid: r.uid, failedItems: stats.failedItems || [] }
@@ -1032,4 +1046,5 @@ window.Share = (function () {
     openShareCenter, openPublishSheet, openJoinSheet, handleUrlHash,
   }
 })()
+
 

@@ -36,23 +36,23 @@ window.Insight = (function () {
 
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">报表中心</span><button id="rpClose" class="btn sm line">关闭</button></div>' +
-      '<div class="list-item" id="rpAsk"><div class="ico">' + ic('send') + '</div><div class="grow"><div>AI 问账</div>' +
-      '<div class="small muted">用一句话查账，基于本机数据回答</div></div><span class="muted">›</span></div>' +
+      '<button type="button" class="list-item report-entry" id="rpAsk"><span class="ico">' + ic('send') + '</span><span class="grow"><span class="report-title">AI 问账</span>' +
+      '<span class="small muted report-title">用一句话查账，基于本机数据回答</span></span><span class="muted">›</span></button>' +
       '<div class="card" style="padding:0">' +
-      '<div class="list-item" id="rpH"><div class="ico">' + ic('heart') + '</div><div class="grow"><div>财务健康度</div>' +
-      '<div class="small muted">储蓄率 · 收支比 · 日均支出</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpAudit"><div class="ico">' + ic('search') + '</div><div class="grow"><div>消费洞察</div>' +
-      '<div class="small muted">固定支出 · 高频小额 · 环比异常</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpY"><div class="ico">' + ic('trending-up') + '</div><div class="grow"><div>年同比（YoY）</div>' +
-      '<div class="small muted">今年 vs 去年逐月对比</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpT"><div class="ico">' + ic('chart-bar') + '</div><div class="grow"><div>分类趋势</div>' +
-      '<div class="small muted">各大类近 12 个月走势</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpA"><div class="ico">' + ic('file-text') + '</div><div class="grow"><div>账户对账单</div>' +
-      '<div class="small muted">按账户导出台账（含余额）</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpG"><div class="ico">' + ic('image') + '</div><div class="grow"><div>凭证相册</div>' +
-      '<div class="small muted">所有小票图片墙</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpTag"><div class="ico">' + ic('tag') + '</div><div class="grow"><div>标签管理</div>' +
-      '<div class="small muted">重命名 · 合并 · 删除 · 报表</div></div><span class="muted">›</span></div>' +
+      '<button type="button" class="list-item report-entry" id="rpH"><span class="ico">' + ic('heart') + '</span><span class="grow"><span class="report-title">财务健康度</span>' +
+      '<span class="small muted report-title">储蓄率 · 收支比 · 日均支出</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpAudit"><span class="ico">' + ic('search') + '</span><span class="grow"><span class="report-title">消费洞察</span>' +
+      '<span class="small muted report-title">固定支出 · 高频小额 · 环比异常</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpY"><span class="ico">' + ic('trending-up') + '</span><span class="grow"><span class="report-title">年同比（YoY）</span>' +
+      '<span class="small muted report-title">今年 vs 去年逐月对比</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpT"><span class="ico">' + ic('chart-bar') + '</span><span class="grow"><span class="report-title">分类趋势</span>' +
+      '<span class="small muted report-title">各大类近 12 个月走势</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpA"><span class="ico">' + ic('file-text') + '</span><span class="grow"><span class="report-title">账户对账单</span>' +
+      '<span class="small muted report-title">查看期间收支汇总，导出流水</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpG"><span class="ico">' + ic('image') + '</span><span class="grow"><span class="report-title">凭证相册</span>' +
+      '<span class="small muted report-title">所有小票图片墙</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpTag"><span class="ico">' + ic('tag') + '</span><span class="grow"><span class="report-title">标签管理</span>' +
+      '<span class="small muted report-title">重命名 · 合并 · 删除 · 报表</span></span><span class="muted">›</span></button>' +
       '</div>' +
       '<button class="btn block" id="rpPoster">' + ic('palette') + ' 生成本月账单海报</button>' +
       '<button class="btn line block" id="rpYearImg" style="margin-top:8px">' + ic('upload') + ' 导出年度报告图片</button>' +
@@ -397,9 +397,9 @@ window.Insight = (function () {
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">账户对账单</span><button id="stClose" class="btn sm line">关闭</button></div>' +
       '<div class="card" style="padding:0">' +
-      accs.map(a => '<div class="list-item" data-sta="' + a.id + '"><div class="ico">' + F.escapeHtml(a.icon || '💰') + '</div>' +
+      accs.map(a => '<button type="button" class="list-item statement-account" data-sta="' + F.escapeHtml(String(a.id)) + '"><div class="ico">' + F.escapeHtml(a.icon || '💰') + '</div>' +
         '<div class="grow"><div>' + F.escapeHtml(a.name) + '</div>' +
-        '<div class="small muted">' + (window.ACCOUNT_KIND_LABEL[a.kind] || '账户') + '</div></div><span class="muted">›</span></div>').join('') +
+        '<div class="small muted">' + F.escapeHtml(window.ACCOUNT_KIND_LABEL[a.kind] || '账户') + '</div></div><span class="muted" aria-hidden="true">›</span></button>').join('') +
       '</div>'
     )
     document.getElementById('stClose').addEventListener('click', U().closeSheet)
@@ -413,6 +413,17 @@ window.Insight = (function () {
     if (!a) return
     const currency = a.currency || 'CNY'
     const money = cents => F.moneySym(cents, F.currencySym(currency))
+    const identity = () => {
+      const state = S.state || {}
+      const id = S.mode === 'cloud' ? state.uid : state.sourceId
+      return id ? JSON.stringify([S.mode, String(id), String(accountId)]) : ''
+    }
+    const scope = identity()
+    const markKey = 'ledger10_reconcile_marks_v1'
+    const marks = () => {
+      try { const all = JSON.parse(localStorage.getItem(markKey) || '{}'); return all[scope] || {} } catch (e) { return {} }
+    }
+    const signature = t => JSON.stringify([t.txn_type, t.amount, t.occurred_at, t.account_id, t.to_account_id, t.category_id, t.note, t.updated_at])
     const now = new Date()
     const defFrom = F.iso(new Date(now.getFullYear(), now.getMonth(), 1))
     const defTo = F.iso(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -420,7 +431,8 @@ window.Insight = (function () {
       const { rows } = await S.listTransactions({ from, to, accountId, limit: 100000 })
       const sorted = rows.slice().sort((x, y) => (x.occurred_at < y.occurred_at ? -1 : x.occurred_at > y.occurred_at ? 1 : x.id - y.id))
       let inflow = 0, outflow = 0
-      const lines = sorted.map(t => {
+      const savedMarks = marks()
+      const lines = sorted.map((t, index) => {
         const cents = F.toCents(t.amount)
         let delta = 0
         if (t.txn_type === 'income') delta = t.account_id === accountId ? cents : 0
@@ -433,8 +445,11 @@ window.Insight = (function () {
         const name = t.txn_type === 'transfer'
           ? (S.accountName(t.account_id) + ' → ' + S.accountName(t.to_account_id))
           : (t.category_id ? S.categoryName(t.category_id) : '未分类')
-        return '<div class="kv"><span>' + F.isoDay(t.occurred_at).slice(5) + '　' + F.escapeHtml(name) +
-          (t.note ? '<div class="tiny muted ellipsis">' + F.escapeHtml(t.note) + '</div>' : '') + '</span>' +
+        return '<div class="kv"><label><input type="checkbox" data-reconciled="' + index + '"' +
+          (scope && t.id != null ? '' : ' disabled') +
+          (scope && savedMarks[String(t.id)] === signature(t) ? ' checked' : '') +
+          ' aria-label="已核对这笔账目"> ' + F.isoDay(t.occurred_at).slice(5) + '　' + F.escapeHtml(name) +
+          (t.note ? '<div class="tiny muted ellipsis">' + F.escapeHtml(t.note) + '</div>' : '') + '</label>' +
           '<b class="num" style="color:' + (delta >= 0 ? 'var(--income)' : 'var(--expense)') + '">' +
           (delta >= 0 ? '+' : '-') + F.escapeHtml(money(Math.abs(delta))) + '</b></div>'
       }).join('')
@@ -452,11 +467,34 @@ window.Insight = (function () {
       '<div class="row"><div class="grow"><div class="small muted">期间流入</div><div id="stInflow" class="num" style="color:var(--income);font-weight:700">' + F.escapeHtml(money(r.inflow)) + '</div></div>' +
       '<div class="grow"><div class="small muted">期间流出</div><div id="stOutflow" class="num" style="color:var(--expense);font-weight:700">' + F.escapeHtml(money(r.outflow)) + '</div></div>' +
       '<div class="grow"><div class="small muted">笔数</div><div id="stCount" class="num" style="font-weight:700">' + r.count + '</div></div></div></div>' +
+      '<p class="small muted">勾选已核对的流水；标记只保存在此设备，不随云同步或备份。账目内容变化后需重新核对。</p>' +
+      (!scope ? '<p class="small muted">当前账本身份不可用，暂不能保存核对标记。</p>' : '') +
       '<div class="card" id="stBody">' + r.html + '</div>' +
       '<button class="btn line block" id="stCsv">导出对账单 CSV</button>'
     )
     document.getElementById('sClose').addEventListener('click', U().closeSheet)
     const body = document.getElementById('stBody')
+    body.addEventListener('change', event => {
+      const box = event.target
+      if (!box.matches('[data-reconciled]')) return
+      const t = r.rows[Number(box.getAttribute('data-reconciled'))]
+      if (!scope || scope !== identity() || !t || t.id == null) {
+        box.checked = false
+        U().toast('账本已变化，请重新打开对账单')
+        return
+      }
+      try {
+        const all = JSON.parse(localStorage.getItem(markKey) || '{}')
+        const scoped = all[scope] || {}
+        if (box.checked) scoped[String(t.id)] = signature(t)
+        else delete scoped[String(t.id)]
+        all[scope] = scoped
+        localStorage.setItem(markKey, JSON.stringify(all))
+      } catch (e) {
+        box.checked = !box.checked
+        U().toast('无法保存核对标记，请检查本机存储空间')
+      }
+    })
     let reloadSequence = 0
     const reload = async () => {
       const ticket = ++reloadSequence
@@ -1359,4 +1397,5 @@ window.Insight = (function () {
     buildReportImage, showReportImage, exportYearImage,
   }
 })()
+
 

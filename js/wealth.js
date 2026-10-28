@@ -253,41 +253,57 @@ window.Wealth = (function () {
     const row = balances.find(b => b.account.id === accountId)
     if (!row) return
     const a = row.account
+    const currency = a.currency || 'CNY'
+    const fmtAmount = cents => F.escapeHtml(F.moneySym(cents, F.currencySym(currency)))
+    const originalInitial = F.toCents(a.initial_balance)
+    const target = { mode: S.mode, uid: S.state && S.state.uid, sourceId: S.state && S.state.sourceId }
+    const sameTarget = () => S.mode === target.mode && (S.state && S.state.uid) === target.uid &&
+      (S.state && S.state.sourceId) === target.sourceId
     const log = readJson(RECON_LOG, []).filter(x => x.accountId === accountId).slice(-5).reverse()
 
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">对账 · ' + F.escapeHtml(a.name) + '</span><button id="rcClose" class="btn sm line">关闭</button></div>' +
       '<div class="card" style="background:var(--brand-soft);box-shadow:none">' +
       '<div class="small muted">当前账面余额</div>' +
-      '<div class="num" style="font-size:26px;font-weight:800">' + F.money(row.balance) + '</div>' +
+      '<div class="num" style="font-size:26px;font-weight:800">' + fmtAmount(row.balance) + ' <span class="small">' + F.escapeHtml(currency) + '</span></div>' +
       '</div>' +
-      '<div class="field"><label>实际余额（元）</label><input id="rcReal" class="input num" type="number" step="0.01" inputmode="decimal" placeholder="填入银行卡 / 钱包里的真实金额"></div>' +
-      '<div class="small muted" id="rcHint" style="margin:-4px 0 12px">差额会写进期初余额，不产生虚假的收支记录。</div>' +
-      '<div class="err" id="rcErr"></div>' +
+      '<div class="field"><label for="rcReal">实际余额（' + F.escapeHtml(currency) + '）</label><input id="rcReal" class="input num" type="number" step="0.01" inputmode="decimal" aria-describedby="rcHint" placeholder="填入银行卡 / 钱包里的真实金额"></div>' +
+      '<div class="small muted" id="rcHint" style="margin:-4px 0 12px">差额会写进期初余额并影响历史余额，请先检查漏记或重复账目。</div>' +
+      '<div class="err" id="rcErr" role="alert"></div>' +
       '<button class="btn block" id="rcSave">校准余额</button>' +
       (log.length ? '<div class="divider">最近校准</div>' + log.map(x =>
         '<div class="kv"><span>' + F.escapeHtml(x.at.slice(0, 16).replace('T', ' ')) + '</span>' +
-        '<span class="num small">¥' + F.yuan(x.from) + ' → ¥' + F.yuan(x.to) + '</span></div>').join('') : '')
+        '<span class="num small">' + fmtAmount(x.from) + ' → ' + fmtAmount(x.to) + '</span></div>').join('') : '')
     )
     const inp = document.getElementById('rcReal')
     inp.addEventListener('input', () => {
       const v = inp.value.trim()
       const hint = document.getElementById('rcHint')
-      if (v === '') { hint.textContent = '差额会写进期初余额，不产生虚假的收支记录。'; return }
+      if (v === '') { hint.textContent = '差额会写进期初余额并影响历史余额，请先检查漏记或重复账目。'; return }
       const diff = F.toCents(Number(v)) - row.balance
       hint.innerHTML = diff === 0 ? '和账面一致，无需调整 ' + ic('check') + ''
-        : '差额 <b class="num">' + (diff > 0 ? '+' : '') + F.money(Math.abs(diff)) + '</b>，将写入期初余额'
+        : '差额 <b class="num">' + (diff > 0 ? '+' : '-') + fmtAmount(Math.abs(diff)) + '</b>，将写入期初余额并影响历史余额'
     })
     document.getElementById('rcClose').addEventListener('click', U().closeSheet)
     document.getElementById('rcSave').addEventListener('click', async () => {
       const v = document.getElementById('rcReal').value.trim()
       const err = document.getElementById('rcErr')
       if (v === '') { err.textContent = '请填写实际余额'; return }
+      if (!Number.isFinite(Number(v))) { err.textContent = '请输入有效余额'; return }
       const real = F.toCents(Number(v))
       const diff = real - row.balance
       if (diff === 0) { U().closeSheet(); U().toast('账面一致，无需调整'); return }
+      const button = document.getElementById('rcSave')
+      button.disabled = true
       try {
-        const newInit = F.toCents(a.initial_balance) + diff
+        const current = (await S.accountBalances()).find(b => String(b.account.id) === String(a.id))
+        if (!sameTarget() || !current || current.balance !== row.balance || F.toCents(current.account.initial_balance) !== originalInitial ||
+            (current.account.currency || 'CNY') !== currency) {
+          err.textContent = '账户余额或信息已变化，请关闭后重新对账。'
+          return
+        }
+        if (!confirm('将修改期初余额并影响历史余额。请先检查漏记或重复账目，确定继续校准？')) return
+        const newInit = originalInitial + diff
         await S.updateAccount(a.id, { initial_balance: newInit / 100 })
         const lg = readJson(RECON_LOG, [])
         lg.push({ accountId: a.id, at: new Date().toISOString(), from: row.balance, to: real })
@@ -296,6 +312,7 @@ window.Wealth = (function () {
         U().toast('已校准，账面与实际一致')
         window.App.refresh()
       } catch (e) { err.textContent = '校准失败：' + (e.message || '') }
+      finally { button.disabled = false }
     })
   }
 
@@ -811,21 +828,24 @@ window.Wealth = (function () {
     }).join('')
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">挪钱</span><button id="bmClose" class="btn sm line">关闭</button></div>' +
-      '<div class="small muted" style="margin-bottom:12px">从「未分配」或某个分类挪额度给另一个分类，总预算不变。</div>' +
+      '<div class="small muted" style="margin-bottom:12px">从「未分配」额度分配给分类，总预算不变。分类之间调整请返回预算页核对并分别修改。</div>' +
       '<div class="field"><label>从哪来</label><select id="bmFrom" class="select">' +
-      '<option value="0">未分配额度（¥' + F.yuan(Math.max(0, total - assigned)) + '）</option>' + opts(0) + '</select></div>' +
+      '<option value="0">未分配额度（¥' + F.yuan(Math.max(0, total - assigned)) + '）</option></select></div>' +
       '<div class="field"><label>给谁</label><select id="bmTo" class="select">' + opts(0) + '</select></div>' +
       '<div class="field"><label>金额（元）</label><input id="bmAmt" class="input num" type="number" min="1" step="1" inputmode="decimal" placeholder="100"></div>' +
       '<div class="err" id="bmErr"></div><button class="btn block" id="bmSave">确认挪动</button>'
     )
     $('#bmClose').addEventListener('click', closeSheet)
+    let submitting = false
     $('#bmSave').addEventListener('click', async () => {
+      if (submitting) return
       const err = $('#bmErr')
       const fromId = Number($('#bmFrom').value)
       const toId = Number($('#bmTo').value)
       const amt = Number($('#bmAmt').value)
       if (!(amt > 0)) { err.textContent = '请输入大于 0 的金额'; return }
       if (fromId === toId) { err.textContent = '来源和目标不能是同一个分类'; return }
+      if (fromId) { err.textContent = '分类之间请返回预算页核对并分别调整，暂不支持直接挪动。'; return }
       const cents = F.toCents(amt)
       const cur = id => { const b = S.budgetOf(monthKey, id); return b != null ? F.toCents(b) : 0 }
       if (fromId) {
@@ -834,13 +854,14 @@ window.Wealth = (function () {
       } else if (cents > total - assigned) {
         err.textContent = '未分配只剩 ¥' + F.yuan(Math.max(0, total - assigned)); return
       }
+      submitting = true
+      $('#bmSave').disabled = true
       try {
-        if (fromId) await S.setBudget(monthKey, fromId, (cur(fromId) - cents) / 100)
         await S.setBudget(monthKey, toId, (cur(toId) + cents) / 100)
         closeSheet()
         toast('已挪动 ¥' + F.yuan(cents))
         window.App.refresh()
-      } catch (e) { err.textContent = '挪动失败，请重试' }
+      } catch (e) { err.textContent = '保存结果待核实，请先检查同步状态并核对分类预算，再决定是否重新操作。' }
     })
   }
 
@@ -1468,4 +1489,5 @@ window.Wealth = (function () {
     openForecast, forecastData, openGoalEditor, openDebtPlan, debtItems, planSim, openBudgetCalendar,
   }
 })()
+
 

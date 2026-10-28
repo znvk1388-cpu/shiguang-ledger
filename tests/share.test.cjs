@@ -35,10 +35,65 @@ function env(initial = {}, storage = new Map()) {
   }
   const window = { DB, crypto: webcrypto }
   const localStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) }
-  const context = vm.createContext({ window, localStorage, crypto: webcrypto, TextEncoder, TextDecoder, Date, console, setTimeout, clearTimeout })
+  const context = vm.createContext({ window, localStorage, crypto: webcrypto, TextEncoder, TextDecoder, Date, console, setTimeout, clearTimeout, btoa, atob, Blob })
   for (const name of ['format.js', 'share.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', name), 'utf8'), context, { filename: name })
-  return { DB, state, Share: window.Share, storage }
+  return { DB, state, Share: window.Share, storage, window }
 }
+
+test('new shares use a secret separate from the object path and preserve it on update', async () => {
+  const source = env(sourceData())
+  const objects = new Map()
+  source.window.UI = { toast: () => {} }
+  source.window.Cloud = {
+    getSession: async () => ({ user: { id: 'owner-123' } }),
+    cloud: { storage: {
+      sharedPath: (uid, rel) => uid + '/' + rel,
+      upload: async (path, blob) => { objects.set(path, await blob.text()); return {} },
+      download: async path => objects.has(path) ? { data: new Blob([objects.get(path)]) } : { error: {} },
+    } },
+  }
+  const first = await source.Share.publish({ label: '家庭' })
+  assert.equal(first.ok, true)
+  assert.match(first.code, /^SG2-/)
+  const parsed = source.Share.parseCode(first.code)
+  assert.ok(parsed.secret)
+  const objectPath = [...objects.keys()][0]
+  assert.ok(!objectPath.includes(parsed.secret))
+  assert.equal((await source.Share.fetchSnapshot(first.code)).ok, true)
+  const target = env()
+  const snap = (await source.Share.fetchSnapshot(first.code)).snap
+  await target.Share.mergeSnapshot(snap, '家庭', parsed.sid, parsed.uid, { shareCode: first.code })
+  assert.equal(target.Share.joinedShares()[0].code, first.code, 'refresh must retain the complete secret')
+  await target.Share.mergeSnapshot(snap, '家庭', parsed.sid, parsed.uid, { onlyFp: [] })
+  assert.equal(target.Share.joinedShares()[0].code, first.code, 'retry must not replace SG2 with an SG1 code')
+  const altered = first.code.slice(0, -1) + (first.code.endsWith('0') ? '1' : '0')
+  assert.ok((await source.Share.fetchSnapshot(altered)).error)
+  const updated = await source.Share.publish({ sid: first.sid, label: '家庭' })
+  assert.equal(updated.code, first.code)
+  assert.equal((await source.Share.fetchSnapshot(first.code)).ok, true)
+})
+
+test('failure to persist the new secret prevents upload', async () => {
+  const broken = new Map()
+  broken.set = () => { throw new Error('storage full') }
+  const source = env(sourceData(), broken)
+  let uploads = 0
+  source.window.UI = { toast: () => {} }
+  source.window.Cloud = { getSession: async () => ({ user: { id: 'owner' } }), cloud: { storage: {
+    sharedPath: (_uid, rel) => rel, upload: async () => { uploads++; return {} },
+  } } }
+  const result = await source.Share.publish({})
+  assert.match(result.error, /无法保存共享码/)
+  assert.equal(uploads, 0)
+})
+
+test('legacy SG1 shares remain readable with the original key', async () => {
+  const source = env(sourceData())
+  const sid = 'abcdefgh2345'
+  const text = await source.Share.encryptJson({ label: '旧共享' }, sid)
+  assert.equal((await source.Share.decryptJson(text, sid)).label, '旧共享')
+  assert.equal(source.Share.parseCode('SG1-owner-123-' + sid).sid, sid)
+})
 
 function sourceData() {
   return {
@@ -66,6 +121,12 @@ function categoryPath(state, id) {
   const parent = c.parent_id && state.categories.find(x => x.id === c.parent_id)
   return { kind: c.kind, path: parent ? parent.name + '/' + c.name : c.name }
 }
+
+test('snapshot refuses to claim a complete backup when transactions are truncated', async () => {
+  const source = env(sourceData())
+  source.DB.listTransactions = async () => ({ rows: source.state.transactions.slice(0, 1), total: 4 })
+  await assert.rejects(source.Share.buildSnapshot('备份', 'all'), /不完整|过多/)
+})
 
 test('v2 backup round-trip preserves book, typed category, account currency, goals and budgets', async () => {
   const source = env(sourceData())
@@ -287,3 +348,4 @@ test('same-name goals in one book preserve distinct amounts and mappings across 
   assert.equal(target.state.goals.length, 2)
   assert.equal(target.state.goals[0].saved_amount, 30)
 })
+

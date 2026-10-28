@@ -265,6 +265,39 @@ test('statement date changes update totals and rows together in account currency
   assert.doesNotMatch(csv, /"40"/)
 })
 
+test('statement reconciliation marks are local, scoped to identity, and reset when a transaction changes', async t => {
+  const rows = [transaction({ id: 1, account_id: 2, amount: 10 })]
+  const { w } = setup(t, { rows })
+  w.DB.state.sourceId = 'library-a'
+  await w.Insight.openStatement(2)
+  let mark = w.document.querySelector('[data-reconciled]')
+  assert.ok(mark)
+  mark.checked = true
+  mark.dispatchEvent(new w.Event('change', { bubbles: true }))
+  await w.Insight.openStatement(2)
+  assert.equal(w.document.querySelector('[data-reconciled]').checked, true)
+  w.DB.state.sourceId = 'library-b'
+  await w.Insight.openStatement(2)
+  assert.equal(w.document.querySelector('[data-reconciled]').checked, false)
+  w.DB.state.sourceId = 'library-a'
+  rows[0].amount = 11
+  await w.Insight.openStatement(2)
+  assert.equal(w.document.querySelector('[data-reconciled]').checked, false)
+})
+
+test('statement account picker exposes native keyboard-operable buttons', async t => {
+  const { w } = setup(t)
+  w.ACCOUNT_KIND_LABEL = {}
+  await w.Insight.openStatementPicker()
+  const choice = w.document.querySelector('[data-sta="2"]')
+  assert.equal(choice.tagName, 'BUTTON')
+  choice.focus()
+  assert.equal(w.document.activeElement, choice)
+  choice.click()
+  await settle(() => w.document.getElementById('stCount'))
+  assert.match(w.document.querySelector('.sheet-title').textContent, /美元账户/)
+})
+
 test('statement ignores an older date request that completes after the latest one', async t => {
   const { w } = setup(t)
   await w.Insight.openStatement(2)
@@ -294,3 +327,4 @@ test('privacy policy and AI ask UI disclose the actual aggregates and detail lim
   ctx.w.Ask.openAskSheet()
   assert.match(ctx.w.document.getElementById('sheet').textContent, /最近 8 笔/)
 })
+

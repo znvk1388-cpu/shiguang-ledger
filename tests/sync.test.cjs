@@ -86,6 +86,17 @@ async function fixture(initial = {}) {
 
 function networkError() { return new Error('NetworkError: simulated connection loss') }
 
+test('backup can read all recurring rules across books and pages without changing the active book', async () => {
+  const rules = Array.from({ length: 1002 }, (_, i) => ({ id: i + 1, book_id: i % 2 ? 2 : 1 }))
+  const f = await fixture({ recurring_rules: rules })
+  f.DB.setActiveBook(1)
+  const visible = await f.DB.listRecurring()
+  assert.equal(visible.length, 501)
+  const all = await f.DB.listRecurring({ ignoreBook: true })
+  assert.equal(all.length, 1002)
+  assert.equal(f.DB.activeBookId(), 1)
+})
+
 test('budget replay keeps its original book after the active book changes', async () => {
   const f = await fixture()
   f.DB.setActiveBook(1)
@@ -276,3 +287,4 @@ test('offline local transfer validation failures are not queued as network failu
   assert.equal(f.Sync.outboxCount(), 0)
   assert.equal(f.calls.length, 0)
 })
+

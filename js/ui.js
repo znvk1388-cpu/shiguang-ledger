@@ -87,6 +87,27 @@ window.UI = (function () {
   let sheetOpen = false
   let sheetVersion = 0
   let sheetFrame = null
+  let editorBaseline = null
+  let editorKeyHandler = null
+  function editorSnapshot() {
+    syncDraftFromInputs()
+    const expect = $('#reimExpect')
+    if (expect) draft.reimbExpect = expect.value
+    return JSON.stringify([draft.type, draft.amount, draft.categoryId, draft.accountId,
+      draft.toAccountId, draft.occurred, draft.note, draft.tags, draft.freq,
+      draft.reimbursable, draft.reimbStatus, draft.reimbExpect,
+      draft.keepAtts, draft.newFiles.map(f => [f.file && f.file.name, f.file && f.file.size, f.file && f.file.lastModified])])
+  }
+  function mayLeaveEditor() {
+    return !$('#edSave') || editorBaseline === null || editorSnapshot() === editorBaseline ||
+      confirm('有尚未保存的修改，确定放弃并关闭吗？')
+  }
+  window.addEventListener('beforeunload', e => {
+    if (sheetOpen && $('#edSave') && editorBaseline !== null && editorSnapshot() !== editorBaseline) {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+  })
   function openSheet(html) {
     const sheet = $('#sheet')
     if (editorSaving) return
@@ -120,8 +141,12 @@ window.UI = (function () {
     })
     return sheetVersion
   }
-  function closeSheet() {
+  function closeSheet(force) {
     if (editorSaving) return
+    if (force !== true && sheetOpen && !mayLeaveEditor()) return
+    if (editorKeyHandler) document.removeEventListener('keydown', editorKeyHandler)
+    editorKeyHandler = null
+    editorBaseline = null
     cancelAnimationFrame(sheetFrame)
     $('#sheet').classList.remove('on')
     $('#mask').classList.remove('on')
@@ -137,7 +162,7 @@ window.UI = (function () {
   function lightbox(url) {
     const box = document.createElement('div')
     box.className = 'lightbox'
-    box.innerHTML = '<img src="' + url + '" alt="凭证"><button class="close">' + ic('close') + '</button>'
+    box.innerHTML = '<img src="' + esc(url) + '" alt="凭证"><button type="button" class="close" aria-label="关闭凭证图片">' + ic('close') + '</button>'
     box.addEventListener('click', () => box.remove())
     $('#lightboxRoot').appendChild(box)
   }
@@ -435,7 +460,7 @@ window.UI = (function () {
         '<button class="btn grow" id="emptyAdd">＋ 记第一笔</button>' +
         '<button class="btn line grow" id="emptyBudget">设个预算</button>' +
         '</div>' +
-        '<button class="btn sm line block" id="emptyDemo" style="margin-top:8px">载入示例数据先看看</button>' +
+        '<button class="btn sm line block" id="emptyDemo" style="margin-top:8px">查看记账示例</button>' +
         '</div>'
     }
     return '<div class="empty"><div class="big">' + ic('receipt') + '</div><div>这段时间还没有记录</div>' +
@@ -835,6 +860,51 @@ window.UI = (function () {
     })
   }
 
+  /* 常用筛选只保存条件；账本和日期始终使用应用时当前选择。 */
+  function savedFilterKey() {
+    const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
+    if (!id) throw new Error('无法确认当前身份，不能使用常用筛选')
+    return 'ledger10_saved_filters_v1:' + encodeURIComponent(JSON.stringify([S.mode, String(id)]))
+  }
+  function savedFilterList() {
+    const key = savedFilterKey()
+    try {
+      const raw = localStorage.getItem(key)
+      if (!raw) return []
+      const items = JSON.parse(raw)
+      if (!Array.isArray(items) || items.some(x => !x || typeof x.name !== 'string' || !x.filters || typeof x.filters !== 'object')) throw new Error('invalid')
+      return items
+    } catch (e) { throw new Error('无法读取本机常用筛选，请检查浏览器存储') }
+  }
+  function savedFilterWrite(items) {
+    const key = savedFilterKey()
+    try { localStorage.setItem(key, JSON.stringify(items)) } catch (e) { throw new Error('保存失败，请检查本机存储空间和权限') }
+  }
+  function savedFilterSave(name, filters) {
+    name = String(name || '').trim()
+    if (!name || name.length > 40) throw new Error('名称需为 1 至 40 个字')
+    const items = savedFilterList()
+    if (items.some(x => x.name === name)) throw new Error('名称已存在，请换一个名称')
+    if (items.length >= 30) throw new Error('最多保存 30 个筛选，请先删除不用的')
+    const f = filters || {}
+    items.push({ name, filters: { type: f.type || '', accountId: f.accountId || null, categoryId: f.categoryId || null,
+      keyword: f.keyword || '', tag: f.tag || '', minAmount: f.minAmount || '', maxAmount: f.maxAmount || '', reimbursable: !!f.reimbursable } })
+    savedFilterWrite(items)
+  }
+  function savedFilterApply(name) {
+    const item = savedFilterList().find(x => x.name === name)
+    if (!item) throw new Error('筛选已不存在，请重新选择')
+    const f = item.filters
+    if (f.accountId && !S.accounts().some(a => String(a.id) === String(f.accountId))) throw new Error('筛选中的账户已不存在或已归档，请删除后重新保存')
+    if (f.categoryId && !S.category(f.categoryId)) throw new Error('筛选中的分类已不存在，请删除后重新保存')
+    return Object.assign({}, f)
+  }
+  function savedFilterDelete(name) {
+    const items = savedFilterList()
+    if (!items.some(x => x.name === name)) throw new Error('筛选已不存在，请重新选择')
+    savedFilterWrite(items.filter(x => x.name !== name))
+  }
+
   function renderFilterBar(st, toggle) {
     const f = st.filters
     const types = [['', '全部'], ['expense', '支出'], ['income', '收入'], ['transfer', '转账']]
@@ -867,6 +937,15 @@ window.UI = (function () {
         '<button class="chip on" data-fcatclear="1">' + ic('tag') + ' ' + esc(S.categoryName(f.categoryId)) + ' ' + ic('close') + '</button>' +
         '</div>'
       : ''
+    let saved = []
+    let savedError = ''
+    if (st.filterOpen) { try { saved = savedFilterList() } catch (e) { savedError = e.message } }
+    const savedPanel = '<div class="small muted" style="margin-top:10px">常用筛选仅保存在本机，应用时使用当前账本和时间；请先应用上方条件再保存。</div>' +
+      (savedError ? '<div class="small">' + esc(savedError) + '</div>' :
+        '<div class="row" style="gap:8px;margin-top:6px"><select id="savedFilterSelect" class="select grow" aria-label="常用筛选">' +
+        '<option value="">选择常用筛选</option>' + saved.map(x => '<option value="' + esc(x.name) + '">' + esc(x.name) + '</option>').join('') + '</select>' +
+        '<button class="btn sm line" id="savedFilterApply">使用</button><button class="btn sm line" id="savedFilterDelete">删除</button></div>' +
+        '<button class="btn sm line" id="savedFilterSave" style="margin-top:6px">保存当前筛选</button>')
     const panel = st.filterOpen
       ? '<div class="filter-panel">' +
         '<div class="row" style="gap:8px">' +
@@ -878,7 +957,7 @@ window.UI = (function () {
         '<input id="fTag" class="input grow" style="height:38px" placeholder="按标签筛选，如「聚餐」" value="' + esc(f.tag || '') + '">' +
         '<button class="btn sm" id="fApply" style="flex:none">应用</button>' +
         '<button class="btn sm line" id="fClear" style="flex:none">清空</button>' +
-        '</div></div>'
+        '</div>' + savedPanel + '</div>'
       : ''
     return '<div class="card filter-bar">' +
       '<div class="row"><input id="kwInput" type="search" aria-label="搜索账单" class="input grow" placeholder="搜索备注 / 分类 / 账户 / 金额" value="' + esc(f.keyword) + '">' +
@@ -894,6 +973,31 @@ window.UI = (function () {
 
   /* 明细页工具入口：相册 / 标签 / 报表中心 */
   function bindHomeTools() {
+    const sfSave = $('#savedFilterSave')
+    if (sfSave) sfSave.addEventListener('click', () => {
+      const name = prompt('为当前筛选命名（仅保存在本机）')
+      if (name == null) return
+      try { savedFilterSave(name, window.App.state.filters); toast('筛选已保存在本机'); window.App.renderTab() } catch (e) { toast(e.message) }
+    })
+    const sfApply = $('#savedFilterApply')
+    if (sfApply) sfApply.addEventListener('click', () => {
+      try {
+        const name = $('#savedFilterSelect').value
+        if (!name) throw new Error('请先选择常用筛选')
+        Object.assign(window.App.state.filters, savedFilterApply(name))
+        toast('已应用筛选，账本和时间保持当前选择')
+        window.App.renderTab()
+      } catch (e) { toast(e.message) }
+    })
+    const sfDelete = $('#savedFilterDelete')
+    if (sfDelete) sfDelete.addEventListener('click', () => {
+      try {
+        const name = $('#savedFilterSelect').value
+        if (!name) throw new Error('请先选择常用筛选')
+        if (!confirm('删除常用筛选「' + name + '」？')) return
+        savedFilterDelete(name); toast('已删除常用筛选'); window.App.renderTab()
+      } catch (e) { toast(e.message) }
+    })
     const rb = $('#reimEntry')
     if (rb) rb.addEventListener('click', () => { Lazy.need('reimb').then(m => m && m.openPanel()) })
     const g = $('#homeGallery')
@@ -1414,8 +1518,8 @@ window.UI = (function () {
           (a.kind === W.LOAN_IN ? '我欠别人' : '别人欠我') + '</span>' : '') + '</div>' +
         '<div class="small muted">' + sub + '</div></div>' +
         amtHtml +
-        /* 终审 3.3 / 细节 5：0 余额没有可对的账，隐藏「对账」（整行也不再放一个空动作） */
-        (debt || x.balance === 0 ? '' : '<button class="btn sm line" data-recon="' + a.id + '" style="flex:none">对账</button>') +
+        /* 即使账面为零，也可能与实际余额不符。 */
+        (debt ? '' : '<button class="btn sm line" data-recon="' + a.id + '" style="flex:none">对账</button>') +
         '</div>'
     }).join('')
 
@@ -1752,7 +1856,7 @@ window.UI = (function () {
     const syncHubCard = '<div class="card" style="padding:0">' +
       '<div class="list-item" id="syncHubBtn"><div class="ico">' + (isGuest ? '' + ic('smartphone') + '' : '' + ic('cloud') + '') + '</div>' +
       '<div class="grow"><div>账号与同步</div>' +
-      '<div class="small muted">' + (isGuest ? '数据只在本机 · 登录可跨设备同步' : '数据已绑账号 · 换设备不丢') +
+      '<div class="small muted">' + (isGuest ? '数据只在本机 · 登录可跨设备同步' : '数据已绑账号 · 换设备前请确认同步完成') +
       '</div></div><span class="muted">›</span></div></div>'
 
     /* 我的页重排（P1-5）：39 项平铺 4.3 屏、没有分组标题，找「加密备份」要滑很久。
@@ -1771,7 +1875,7 @@ window.UI = (function () {
       '<div class="card me-stats">' +
       '<div class="kv"><span>累计记录</span><b class="num">' + (txnCount.total || 0) + ' 笔</b></div>' +
       '<div class="kv"><span>凭证图片</span><b class="num">' + usage.count + ' 张' + (usage.bytes ? ' · ' + F.bytes(usage.bytes) : '') + '</b></div>' +
-      '<div class="kv"><span>' + (isGuest ? '数据位置' : '云端存储') + '</span><b>' + (isGuest ? '本机浏览器（未同步）' : '已开通 · 换设备不丢') + '</b></div>' +
+      '<div class="kv"><span>' + (isGuest ? '数据位置' : '云端存储') + '</span><b>' + (isGuest ? '本机浏览器（未同步）' : '已开通 · 请确认同步状态') + '</b></div>' +
       '</div>' +
       '<div class="card" style="padding:0"><div class="list-item" id="budgetRow">' +
       '<div class="ico">' + ic('target') + '</div>' +
@@ -1807,9 +1911,9 @@ window.UI = (function () {
         it('filesBtn', '' + ic('folder') + '', '文件柜', '保单 / 合同 / 保修卡，不挂账也能存'),
       ]) +
       grp('数据与安全', [
-        it('syncHubBtn', isGuest ? '' + ic('smartphone') + '' : '' + ic('cloud') + '', '账号与同步', isGuest ? '数据只在本机 · 登录可跨设备同步' : '数据已绑账号 · 换设备不丢'),
+        it('syncHubBtn', isGuest ? '' + ic('smartphone') + '' : '' + ic('cloud') + '', '账号与同步', isGuest ? '数据只在本机 · 登录可跨设备同步' : '数据已绑账号 · 换设备前请确认同步完成'),
         it('syncBtn', '' + ic('refresh') + '', '数据与同步', '连接状态 · 待上传 · 冲突检查', 'syncSub'),
-        it('backupBtn', '' + ic('database') + '', 'JSON 备份 / 恢复', '完整数据，可跨设备导入'),
+        it('backupBtn', '' + ic('database') + '', 'JSON 备份 / 恢复', '查看备份范围并导出'),
         it('vaultBtn', '' + ic('lock') + '', '加密备份到云端', '口令加密后上传，服务端只存密文'),
         it('localEncBtn', '' + ic('database') + '', '导出加密文件到本机', '不经过服务器，最保险的一招'),
         it('exportBtn', '' + ic('upload') + '', '导出 CSV', '含全部明细，可用 Excel 打开'),
@@ -1830,7 +1934,7 @@ window.UI = (function () {
       ]) +
       '<details class="me-adv"><summary>高级 · 演示与开发</summary>' +
       '<div class="card" style="padding:0">' +
-      it('demoBtn', '' + ic('zap') + '', '载入示例数据', '快速体验统计 / 预算 / 报表') +
+      it('demoBtn', '' + ic('zap') + '', '查看记账示例', '预览虚构数据，不修改账本') +
       it('seedBtn', '' + ic('sparkles') + '', '重置为推荐分类', '在现有分类之外补充一套') +
       '</div></details>' +
       (isGuest ? '' : '<button class="btn danger block" id="logoutBtn" style="margin-top:12px">退出登录</button>') +
@@ -2058,8 +2162,8 @@ window.UI = (function () {
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">JSON 备份 / 恢复</span><button id="bakClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin-bottom:12px">' +
-      (isGuest ? '游客数据只存在本机，建议定期备份。备份文件含账目、图片、账本、预算、目标全部数据。'
-               : '此备份包含账目、账户、分类、账本、预算、周期规则和目标，不包含云端图片凭证。请另行保存重要凭证原图。') + '</div>' +
+      (isGuest ? '游客数据只存在本机，建议定期备份。备份包含账目、图片、账本、预算和目标等，不包含仅存本机的报销进度及对账标记。'
+               : '此备份包含账目、账户、分类、账本、预算、周期规则和目标，不包含云端图片、模板、回收站账目、仅存本机的报销进度及对账标记。请另行保存重要凭证原图。') + '</div>' +
       '<button class="btn block" id="bakExport">导出备份文件</button>' +
       '<div class="divider">恢复</div>' +
       '<input type="file" id="bakFile" accept=".json,application/json" class="hidden">' +
@@ -2074,13 +2178,17 @@ window.UI = (function () {
         if (isGuest) {
           payload = await window.GuestStore.backup()
         } else {
+          const txns = await S.listTransactions({ limit: 100000, ignoreBook: true })
+          if (!txns || !Array.isArray(txns.rows) || (Number.isFinite(txns.total) && txns.total > txns.rows.length)) {
+            throw new Error('账目读取不完整或数量过多，未生成备份')
+          }
           const dump = {
             accounts: S.allAccounts(),
             categories: S.state.categories,
-            transactions: (await S.listTransactions({ limit: 100000, ignoreBook: true })).rows,
+            transactions: txns.rows,
             attachments: [],
             budgets: S.state.budgets,
-            recurring: (await S.listRecurring()),
+            recurring: (await S.listRecurring({ ignoreBook: true })),
             books: S.books(),
             goals: S.state.goals,
           }
@@ -2373,13 +2481,16 @@ window.UI = (function () {
     }
 
     renderEditor(editing ? txn.id : null)
+    editorBaseline = editorSnapshot()
 
     /* Esc 关闭（只在记账弹窗还开着时生效，避免监听泄漏） */
     const onKey = e => {
       if (!sheetOpen || !$('#edSave')) { document.removeEventListener('keydown', onKey); return }
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditor(editing ? txn.id : null) }
-      if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); closeSheet() }
+      if (e.key === 'Escape') closeSheet()
     }
+    if (editorKeyHandler) document.removeEventListener('keydown', editorKeyHandler)
+    editorKeyHandler = onKey
     document.addEventListener('keydown', onKey)
   }
 
@@ -2421,6 +2532,8 @@ window.UI = (function () {
     if (tags) draft.tags = tags.value
     const time = $('#timeInput')
     if (time) draft.occurred = time.value
+    const expect = $('#reimExpect')
+    if (expect) draft.reimbExpect = expect.value
   }
 
   /* 分类单元格点击绑定：带「只绑一次」守卫（原地同步会重复建单元格，不能重复绑） */
@@ -2630,15 +2743,15 @@ window.UI = (function () {
       '<button type="button" class="qt" id="voiceBtn" aria-label="语音记账">' + ic('mic') + '</button>' +
       '<button type="button" class="qt" id="edAiBtn" aria-label="AI 记账">' + ic('sparkles') + '</button></div>' +
       catBlock + accBlock +
-      '<div class="field"><label>备注</label><input id="noteInput" class="input" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"></div>' +
+      '<div class="field"><label for="noteInput">备注</label><input id="noteInput" class="input" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"></div>' +
       '<div class="chips scroll" id="noteSug" style="margin:-6px 0 10px"></div>' +
       '<button class="btn sm line block" id="moreToggle" style="margin:12px 0">' +
       (editorMoreOpen ? '收起更多选项 ⌃' : '更多选项：时间 · 标签 · 周期 · 报销 · 凭证图片 ⌄') + '</button>' +
       '<div id="moreBox"' + (editorMoreOpen ? '' : ' class="hidden"') + '>' +
-      '<div class="field"><label>时间</label>' +
+      '<div class="field"><label for="timeInput">时间</label>' +
       '<div class="row"><input id="timeInput" class="input grow" type="datetime-local" value="' + draft.occurred + '">' +
       '<button class="btn sm line" id="nowBtn" style="flex:none">此刻</button></div></div>' +
-      '<div class="field"><label>标签（逗号分隔，可留空）</label><input id="tagInput" class="input" placeholder="如：聚餐,AA" maxlength="40" value="' + esc(draft.tags) + '"></div>' +
+      '<div class="field"><label for="tagInput">标签（逗号分隔，可留空）</label><input id="tagInput" class="input" placeholder="如：聚餐,AA" maxlength="40" value="' + esc(draft.tags) + '"></div>' +
       extraBlock +
       imgBlock +
       '</div>' +
@@ -2734,12 +2847,14 @@ window.UI = (function () {
     })
     $('#pickImg').addEventListener('click', () => $('#fileInput').click())
     $('#fileInput').addEventListener('change', e => {
+      syncDraftFromInputs()
       const files = Array.prototype.slice.call(e.target.files || [])
       files.forEach(f => draft.newFiles.push({ file: f, url: URL.createObjectURL(f) }))
       renderEditor(editingId)
     })
     $$('[data-removenew]').forEach(b => {
       b.addEventListener('click', () => {
+        syncDraftFromInputs()
         const i = Number(b.getAttribute('data-removenew'))
         draft.newFiles.splice(i, 1)
         renderEditor(editingId)
@@ -2747,6 +2862,7 @@ window.UI = (function () {
     })
     $$('[data-remove]').forEach(b => {
       b.addEventListener('click', async () => {
+        syncDraftFromInputs()
         const id = Number(b.getAttribute('data-remove'))
         const path = b.getAttribute('data-path')
         await S.removeAttachment(id, path)
@@ -2782,9 +2898,12 @@ window.UI = (function () {
     const vb = $('#voiceBtn')
     if (vb) vb.addEventListener('click', () => startVoice(editingId))
     const tpb = $('#tplPickBtn')
-    if (tpb) tpb.addEventListener('click', () => openTemplatePicker())
+    if (tpb) tpb.addEventListener('click', () => openTemplatePicker(sheetVersion))
     const aiBtn = $('#edAiBtn')
-    if (aiBtn) aiBtn.addEventListener('click', () => Lazy.need('smart').then(m => m && m.openAiSheet()))
+    if (aiBtn) aiBtn.addEventListener('click', () => {
+      const version = sheetVersion
+      Lazy.need('smart').then(m => { if (m && version === sheetVersion && $('#edSave') && mayLeaveEditor()) m.openAiSheet() })
+    })
     const ruleBtn = $('#edRuleBtn')
     if (ruleBtn) ruleBtn.addEventListener('click', () => {
       if (editingId) { toast('编辑已有账目时不套用规则'); return }
@@ -2796,7 +2915,10 @@ window.UI = (function () {
       renderEditor(editingId)
     })
     const ruleCfg = $('#edRuleCfg')
-    if (ruleCfg) ruleCfg.addEventListener('click', () => Lazy.need('smart').then(m => m && m.openRuleManager()))
+    if (ruleCfg) ruleCfg.addEventListener('click', () => {
+      const version = sheetVersion
+      Lazy.need('smart').then(m => { if (m && version === sheetVersion && $('#edSave') && mayLeaveEditor()) m.openRuleManager() })
+    })
 
     /* 备注智能补全：点历史备注直接填，并顺手跑一遍规则 */
     const noteInput = $('#noteInput')
@@ -2874,6 +2996,7 @@ window.UI = (function () {
     /* 点金额区才展开键盘：默认收起，让「分类 / 账户 / 保存」都在首屏 */
     const amtBox = $('#amtBox')
     if (amtBox) amtBox.addEventListener('click', () => { if (!editorKpOpen) setKp(true) })
+    amtEl.addEventListener('focus', () => { if (window.innerWidth < 640 && !editorKpOpen) setKp(true) })
     if (kpWrap) setKp(!!editorKpOpen)
     if (kp) kp.addEventListener('click', e => {
       const btn = e.target.closest ? e.target.closest('button[data-k]') : null
@@ -2909,7 +3032,7 @@ window.UI = (function () {
       $('#edDelete').addEventListener('click', async () => {
         if (!confirm('删除后会进入回收站，可随时恢复，确定删除？')) return
         await S.deleteTransaction(editingId)
-        closeSheet()
+        closeSheet(true)
         toast('已移入回收站')
         window.App.refresh()
       })
@@ -3061,7 +3184,7 @@ window.UI = (function () {
         const exEl = $('#reimExpect')
         writeReimb(committedId, draft.type === 'expense' ? draft.reimbStatus : '', exEl ? exEl.value : draft.reimbExpect)
       } catch (e) { /* 忽略 */ }
-      closeSheet()
+      closeSheet(true)
       if (window.Smart) window.Smart.invalidateNoteCache()
       /* 记录分类使用频次，下次打开记账弹窗时常用分类排到前面 */
       if (!editingId || duplicate) bumpCatUse(payload.category_id)
@@ -3084,7 +3207,7 @@ window.UI = (function () {
       }
       if (committedId != null) {
         editorSaving = false
-        closeSheet()
+        closeSheet(true)
         window.App.refresh()
         openSheet('<div class="sheet-head"><b class="sheet-title">账目已保存</b><button class="btn sm line" id="partialClose">关闭</button></div>' +
           '<p>账目已保存，但周期规则或凭证未完成：' + esc(e.message || '请检查网络') + '</p><p class="small muted">请在已保存的账目中补充凭证，或在周期记账中检查规则。无需重新记账。</p>')
@@ -3134,23 +3257,15 @@ window.UI = (function () {
   }
 
   async function applyTemplate(tpl) {
-    draft.type = tpl.txn_type
-    draft.amount = tpl.amount != null ? String(tpl.amount) : ''
-    draft.categoryId = tpl.category_id || null
-    draft.accountId = tpl.account_id || (S.accounts()[0] ? S.accounts()[0].id : null)
-    draft.toAccountId = tpl.to_account_id || (S.accounts()[1] ? S.accounts()[1].id : null)
-    draft.note = tpl.note || ''
-    draft.tags = (tpl.tags || []).join(',')
-    draft.newFiles = []
-    draft.keepAtts = []
-    draft.freq = ''
-    draft.reimbursable = false
-    draft.occurred = F.localInput(new Date())
-    renderEditor(null)
+    await openEditor(null, tpl.txn_type, {
+      amount: tpl.amount, categoryId: tpl.category_id, accountId: tpl.account_id,
+      toAccountId: tpl.to_account_id, note: tpl.note, tags: tpl.tags,
+    })
   }
 
-  async function openTemplatePicker() {
+  async function openTemplatePicker(editorVersion) {
     const tpls = await S.listTemplates().catch(() => [])
+    if (editorVersion != null && (editorVersion !== sheetVersion || !$('#edSave') || !mayLeaveEditor())) return
     let html = '<div class="sheet-head"><span class="sheet-title">套用模板</span><button id="tplClose" class="btn sm line">关闭</button></div>'
     if (!tpls.length) {
       html += '<div class="empty" style="padding:24px"><div class="big">📋</div><div>还没有模板</div><div class="small" style="margin-top:6px">在记账页点「' + ic('star') + ' 存为模板」即可保存常用一笔</div></div>'
@@ -3252,6 +3367,7 @@ window.UI = (function () {
 
   return {
     $, $$, toast, openSheet, closeSheet, lightbox, ic,
+    savedFilterList, savedFilterSave, savedFilterApply, savedFilterDelete,
     renderOverview, renderHome, renderStats, renderAssets, renderMe, ledgerEmpty,
     openEditor, loadMore, periodRange, periodTitle, openPeriodPicker,
     openBookSheet, openCategoryBudget, openSubscriptionSheet, openReminderSettings,
@@ -3267,4 +3383,5 @@ window.UI = (function () {
 
 /* 各模块直接调 ic()，挂全局别名 */
 window.ic = window.UI.ic
+
 
