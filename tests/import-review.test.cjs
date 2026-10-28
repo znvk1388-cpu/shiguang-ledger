@@ -39,6 +39,26 @@ test('custom column mapping supports explicit transfer and destination account',
   } finally { dom.window.close() }
 })
 
+test('preview identifies invalid source rows and gives enough context to review repeated order numbers', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.DB = { mode: 'guest', state: { categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    bookName: () => '日常', rootCategories: () => [], allAccounts: () => [],
+    listTransactions: async () => ({ rows: [] }) }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const parsed = w.LedgerCsv.parseCsvText('日期,类型,金额,账户,备注,交易单号\n无效日期,支出,8,微信,早餐,one\n2026-10-28 10:11,支出,10,微信,咖啡,编号123\n2026-10-28 11:12,支出,10,微信,咖啡,编号123')
+  await w.LedgerCsv.openImportPreview(parsed, '测试.csv')
+  const sheet = w.document.querySelector('#sheet').textContent
+  assert.match(sheet, /第 2 条.*日期无效/)
+  const label = w.document.querySelector('[data-import-uncertain]').closest('label').textContent
+  assert.match(label, /编号123/)
+  assert.match(label, /微信/)
+  assert.match(label, /11:12/)
+})
+
 test('custom column selector exposes destination account and mapped transfer saves both account IDs', async t => {
   const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
   t.after(() => dom.window.close())
@@ -134,4 +154,32 @@ test('account mapping persists for the same identity and routes imported rows to
   assert.match(w.document.querySelector('#sheet').textContent, /原映射账户已不存在/)
   assert.equal(w.document.querySelector('#impRun').disabled, true)
   assert.equal(writes.length, 1)
+})
+
+test('account and category mapping cannot change while an import is running or being retried', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.App = { refresh: async () => {} }
+  let rejectSave
+  const save = new Promise((_, reject) => { rejectSave = reject })
+  w.DB = { mode: 'guest', state: { sourceId: 'test', categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    bookName: () => '日常', rootCategories: () => [{ id: 2, name: '餐饮' }],
+    allAccounts: () => [{ id: 1, name: '微信' }],
+    category: () => null, listTransactions: async () => ({ rows: [] }),
+    addCategory: async () => ({ id: 2 }), addTransaction: async () => save }
+  for (const file of ['js/format.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const rows = [{ type: 'expense', amount: 10, occurred: '2026-10-28T12:00:00', note: '午餐', accountName: '微信', categoryName: '餐费' }]
+  await w.LedgerCsv.openImportPreview({ rows, report: {} }, '测试.csv')
+  const account = w.document.querySelector('[data-account-map]'), category = w.document.querySelector('[data-map]')
+  w.document.querySelector('#impRun').click()
+  assert.equal(account.disabled, true)
+  assert.equal(category.disabled, true)
+  rejectSave(new Error('网络故障'))
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(account.disabled, true)
+  assert.equal(category.disabled, true)
+  assert.match(w.document.querySelector('#impErr').textContent, /重试/)
 })

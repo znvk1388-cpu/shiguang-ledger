@@ -584,15 +584,21 @@
         : '') +
       (parsed.report && parsed.report.skipped
         ? '<div class="card small">已跳过 ' + parsed.report.skipped + ' 条：' +
-          esc(Object.keys(parsed.report.reasons).map(reason => reason + ' ' + parsed.report.reasons[reason] + ' 条').join('；')) + '</div>' : '') +
+          esc(Object.keys(parsed.report.reasons).map(reason => reason + ' ' + parsed.report.reasons[reason] + ' 条').join('；')) +
+          ((parsed.report.skippedRows || []).length
+            ? '<details><summary>查看跳过的记录编号和原因</summary>' +
+              parsed.report.skippedRows.slice(0, 50).map(item => '<div>第 ' + esc(String(item.record)) + ' 条：' + esc(item.reason) + '</div>').join('') +
+              (parsed.report.skippedRows.length > 50 ? '<div>仅显示前 50 条，请按原因检查原文件。</div>' : '') + '</details>' : '') + '</div>' : '') +
       (parsed.report && parsed.report.sameFileDuplicates
         ? '<div class="card small" style="color:var(--warn)">同文件内有 ' + parsed.report.sameFileDuplicates +
         ' 笔与其他记录的日期、类型、金额、备注相同。请核对原账单；这些记录仍会保留导入。</div>' : '') +
       (dupCount > ordHit ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">无单号的记录按日期、金额和备注推测；文件内单号重复也需核对，可能是同一订单的不同记录。</div>' +
         rows.map((r, i) => r.uncertain ? '<label class="list-item"><input type="checkbox" data-import-uncertain="' + i + '"><span class="grow small">' +
-          (r.fileOrderDuplicate ? '文件内单号重复 · ' : '') + esc(r.occurred.slice(0, 10)) + ' · ' + esc(r.note || '无备注') + ' · ' + F().money(F().toCents(r.amount)) + ' · 仍要导入</span></label>' : '').join('') + '</div>' : '') +
+          (r.fileOrderDuplicate ? '文件内单号重复 · ' : '') + esc(F().isoLocal(r.occurred).slice(0, 16).replace('T', ' ')) +
+          ' · ' + esc(r.accountName || '未指定账户') + ' · ' + esc(r.note || '无备注') +
+          (r.orderNo ? ' · 单号 ' + esc(r.orderNo) : '') + ' · ' + F().money(F().toCents(r.amount)) + ' · 仍要导入</span></label>' : '').join('') + '</div>' : '') +
       '<p class="small muted">目标账本：<b>' + esc(S().bookName(scopeBook) || '默认账本') + '</b>。CSV 中的账本列仅供参考，本次全部写入此账本。</p>' +
-      '<p class="small muted">导入中关闭面板会停止后续记录；正在保存的一笔可能完成。已成功记录不会在本面板重试时重复写入。</p>' +
+      '<p class="small muted">开始导入后，本次映射和选择将锁定；若需修改，请关闭后重新导入并核对。关闭面板会停止后续记录，正在保存的一笔可能完成；本面板重试不会重复写入已成功记录。</p>' +
       (autoMapped.length
         ? '<div class="card"><div class="small muted">已按上次记住的映射自动归类 ' + autoMapped.length + ' 个分类：' +
           esc(autoMapped.slice(0, 8).join('、')) + (autoMapped.length > 8 ? ' 等' : '') + '</div></div>'
@@ -642,7 +648,7 @@
       if (running || runButton.disabled || !isActive()) return
       running = true
       runButton.disabled = true
-      document.querySelectorAll('#sheet [data-import-uncertain]').forEach(box => { box.disabled = true })
+      document.querySelectorAll('#sheet [data-import-uncertain], #sheet [data-account-map], #sheet [data-map]').forEach(box => { box.disabled = true })
       runButton.textContent = '导入中…'
       errorBox.textContent = ''
       try {
