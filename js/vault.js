@@ -550,7 +550,12 @@ window.Vault = (function () {
 
   /* ---------------- 本机加密备份界面 ---------------- */
 
+  /* File input 在重绘后会被浏览器清空；仅在当前面板会话内保留 File，
+     允许改口令或重试失败项，不保存口令，也不把文件写进本机存储。 */
+  let localRestoreFile = null
+
   function openLocalSheet() {
+    localRestoreFile = null
     renderLocal()
   }
 
@@ -602,10 +607,10 @@ window.Vault = (function () {
       '</div>' +
       '<input type="file" id="vlFile" accept=".json,.sgvault.json,application/json" style="display:none">' +
       '<button class="btn line block" id="vlPick">' + ic('folder') + ' 选择备份文件并恢复</button>' +
-      '<div class="field" id="vlRestoreBox" style="display:none;margin-top:8px">' +
+      '<div class="field" id="vlRestoreBox" style="display:' + (localRestoreFile ? '' : 'none') + ';margin-top:8px">' +
       '<label for="vlRPass">该备份的口令</label>' +
       '<input id="vlRPass" class="input" type="password" placeholder="输入恢复口令" autocomplete="off"></div>' +
-      '<button class="btn block" id="vlRestore" style="display:none;margin-top:8px">确认恢复</button>' +
+      '<button class="btn block" id="vlRestore" style="display:' + (localRestoreFile ? '' : 'none') + ';margin-top:8px">确认恢复</button>' +
       '</div>' +
 
       /* 网盘指引 */
@@ -623,7 +628,7 @@ window.Vault = (function () {
 
   function bindLocal() {
     const $ = s => document.querySelector(s)
-    const close = $('#vlClose'); if (close) close.addEventListener('click', () => U().closeSheet())
+    const close = $('#vlClose'); if (close) close.addEventListener('click', () => { localRestoreFile = null; U().closeSheet() })
 
     /* 导出 */
     const go = $('#vlGo')
@@ -639,32 +644,30 @@ window.Vault = (function () {
     })
 
     /* 恢复：选文件 → 显示口令框 → 确认 */
-    let picked = null
     const file = $('#vlFile')
     const pick = $('#vlPick')
     if (pick && file) {
       pick.addEventListener('click', () => file.click())
       file.addEventListener('change', () => {
-        picked = (file.files && file.files[0]) || null
+        const picked = (file.files && file.files[0]) || null
         if (!picked) return
-        const box = $('#vlRestoreBox'), rb = $('#vlRestore')
-        if (box) box.style.display = ''
-        if (rb) rb.style.display = ''
+        localRestoreFile = picked
         renderLocal('已选择：' + picked.name + '（' + kb(picked.size) + '），输入口令后点「确认恢复」', 'ok')
-        picked = (document.querySelector('#vlFile') || {}).files ? document.querySelector('#vlFile').files[0] : picked
       })
     }
     const restoreBtn = $('#vlRestore')
     if (restoreBtn) restoreBtn.addEventListener('click', async () => {
       const f = (document.querySelector('#vlFile') || {}).files
-      const file0 = (f && f[0]) || picked
+      const file0 = (f && f[0]) || localRestoreFile
       const pass = ($('#vlRPass') || {}).value || ''
       if (!file0) { renderLocal('请先选择备份文件', 'err'); return }
       /* 恢复不校验长度：老备份可能是 6~7 位口令创建的，能解密就行 */
       if (!String(pass)) { renderLocal('请输入该备份的口令', 'err'); return }
       if (!confirm('会把备份内容合并进当前数据（重复的自动跳过），确定继续？')) return
       restoreBtn.disabled = true
-      const r = await restoreLocal(file0, pass)
+      let r
+      try { r = await restoreLocal(file0, pass) }
+      catch (e) { renderLocal((e && e.message) || '恢复失败，请重试', 'err'); return }
       if (r.error) { renderLocal(r.error, 'err'); return }
       const s = r.stats || {}
       if (window.App && window.App.refresh) { try { await window.App.refresh() } catch (e) { /* 忽略 */ } }
@@ -779,3 +782,4 @@ window.Vault = (function () {
     openCenter, openLocalSheet, openSyncHub, replayOnboard, MIN_PASS, ITER,
   }
 })()
+

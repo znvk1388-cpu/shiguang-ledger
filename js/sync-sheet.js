@@ -97,11 +97,15 @@ window.SyncSheet = (function () {
 
     /* ---- 冲突：不静默覆盖，也不参与批量重试，必须由人决定 ---- */
     const nConflict = q.filter(x => x.state === 'conflict').length
+    const goalConflict = q.some(x => x.state === 'conflict' && x.method === 'goalDeposit')
+    const transactionConflict = q.some(x => x.state === 'conflict' && x.method === 'updateTransaction')
     const conflictCard = nConflict
       ? '<div class="card" style="border-left:3px solid var(--expense)">' +
           '<div class="small"><b>' + nConflict + ' 条修改与云端冲突</b><br>' +
-          '这些记录在你编辑期间被另一台设备改过。为避免覆盖别人的修改，应用<b>没有自动写入</b>，' +
-          '也不会在「全部重试」里重放。<br>请回到账目列表，重新打开这几笔并保存 —— 会弹出两版对比让你选。</div>' +
+          '这些操作读取的版本或余额已发生变化，应用<b>没有继续重放</b>，' +
+          '也不会在「全部重试」里重放。' +
+          (transactionConflict ? '<br>账目修改请回到明细列表核对后重新编辑，发生冲突时会弹出两版对比。' : '') + '</div>' +
+          (goalConflict ? '<div class="small" style="margin-top:8px">目标存入 / 取出可能已经生效。请先刷新核对目标余额，确认已生效后丢弃对应的待上传记录，避免重复操作。</div>' : '') +
         '</div>'
       : ''
 
@@ -287,3 +291,4 @@ window.SyncSheet = (function () {
 
   return { open: open, showConflict: showConflict }
 })()
+

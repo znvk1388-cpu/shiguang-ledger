@@ -26,7 +26,8 @@
     const from = F.iso(new Date(today.getFullYear(), today.getMonth(), today.getDate()))
     const results = await Promise.allSettled([
       S.monthlySummary(from, F.iso(tomorrow)),
-      S.listTransactions({ type: 'expense', limit: 200 })
+      S.listTransactions({ type: 'expense', limit: 200 }),
+      S.listTransactions({ type: 'expense', from: from, to: F.iso(tomorrow), limit: 1 })
     ])
     if (ticket !== revision || st.tab !== 'home') return
     /* 终审 P1（3.1）：账本全空时整块收起——「今天 ¥0.00」没有信息量，
@@ -37,8 +38,9 @@
     try { quickOn = localStorage.getItem('ledger10_home_quick') !== 'off' } catch (e) { /* 忽略 */ }
     if (!quickOn) { target.innerHTML = ''; target.classList.add('hidden'); return }
     const sum = results[0].status === 'fulfilled' ? results[0].value : null
-    let spent = 0, count = 0
-    if (sum) sum.forEach(r => { spent += F.toCents(r.expense); count += Number(r.txn_count || 0) })
+    let spent = 0
+    if (sum) sum.forEach(r => { spent += F.toCents(r.expense) })
+    const count = results[2].status === 'fulfilled' ? Number(results[2].value.total) : null
     const ranks = new Map()
     if (results[1].status === 'fulfilled') results[1].value.rows.forEach(t => {
       if (S.category(t.category_id)) ranks.set(t.category_id, (ranks.get(t.category_id) || 0) + 1)
@@ -54,7 +56,7 @@
       '<button class="qb-today" id="sgToday">' +
       '<span class="qb-k">今天</span>' +
       (sum
-        ? '<span class="qb-v num">' + F.money(spent) + '</span><span class="qb-n">支出 · ' + count + ' 笔</span>'
+        ? '<span class="qb-v num">' + F.moneySym(spent, F.currencySym(F.baseCurrency())) + '</span><span class="qb-n">支出' + (count == null ? '' : ' · ' + count + ' 笔') + '</span>'
         : '<span class="qb-v qb-off">今日收支暂不可用</span>') +
       icon('arrow-right') + '</button>' +
       '<div class="qb-cats">' +
@@ -98,3 +100,4 @@
     })
   })
 })()
+

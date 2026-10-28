@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.0'
+  const VERSION = '1.18.1'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -963,14 +963,41 @@ window.App = (function () {
       '<button class="btn sm" id="updateNow">立即更新</button></div>'
     const btn = $('#updateNow')
     if (btn) btn.addEventListener('click', async () => {
+      if (btn.disabled) return
+      const workers = navigator.serviceWorker
+      const waiting = reg && reg.waiting
+      if (!waiting || !workers) { location.reload(); return }
+      btn.disabled = true
+      btn.textContent = '正在更新…'
+      let timer = null
+      let reloaded = false
+      const cleanup = () => {
+        workers.removeEventListener('controllerchange', onChange)
+        if (timer != null) clearTimeout(timer)
+      }
+      const onChange = () => {
+        if (reloaded) return
+        reloaded = true
+        cleanup()
+        location.reload()
+      }
       try {
-        if (reg && reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' })
-        if (window.caches) {
-          const keys = await caches.keys()
-          await Promise.all(keys.map(k => caches.delete(k)))
-        }
-      } catch (e) { /* 忽略 */ }
-      location.reload()
+        /* 新版本的预缓存必须保留；旧缓存由 worker 激活时按版本清理。
+           先监听接管再发消息，避免重载仍由旧 worker 响应。 */
+        workers.addEventListener('controllerchange', onChange)
+        timer = setTimeout(() => {
+          cleanup()
+          btn.disabled = false
+          btn.textContent = '重试更新'
+          UI.toast('更新尚未完成，请稍后重试')
+        }, 15000)
+        waiting.postMessage({ type: 'SKIP_WAITING' })
+      } catch (e) {
+        cleanup()
+        btn.disabled = false
+        btn.textContent = '重试更新'
+        UI.toast('暂时无法更新，请稍后重试')
+      }
     })
   }
 
@@ -1167,7 +1194,8 @@ window.App = (function () {
     let expense = 0
     let income = 0
     ;(state.txns || []).forEach(x => {
-      const c = F.toCents(x.amount)
+      const account = S.allAccounts().find(a => a.id === x.account_id)
+      const c = F.toBase(F.toCents(x.amount), (account && account.currency) || 'CNY')
       if (x.txn_type === 'expense') expense += c
       else if (x.txn_type === 'income') income += c
     })
@@ -1176,6 +1204,7 @@ window.App = (function () {
       month: state.year + '-' + F.pad2(state.month),
       expense: F.yuan(expense),
       income: F.yuan(income),
+      currency: F.baseCurrency(),
       version: VERSION,
     })
   }
@@ -1189,3 +1218,4 @@ window.App = (function () {
     inMiniProgram: () => state.inMiniProgram,
   }
 })()
+

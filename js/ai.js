@@ -253,6 +253,29 @@ window.AI = (function () {
   }
   function addIssue(list, msg) { if (list.indexOf(msg) < 0) list.push(msg) }
 
+  /* 复核计数和真正写库共用这组校验；写库前重新读取账户与分类，
+     不能把模型的 warning 或先前的白名单匹配当成可保存的保证。 */
+  function batchItemIssues(it) {
+    const issues = []
+    if (!plainObject(it)) return ['条目格式无效']
+    if (it.type !== 'expense' && it.type !== 'income') issues.push('交易方向无效，请单独记录')
+    if (normAmount(it.amount) === null) issues.push('金额无效，请填写实际金额')
+    const acc = accounts().find(a => a.id === it.accountId)
+    const cat = categories().find(c => c.id === it.categoryId && c.kind === it.type)
+    if (!acc) issues.push('账户未明确或已失效，请选择')
+    if (!cat) issues.push('分类未匹配或已失效，请选择')
+    if (it.currency != null && (typeof it.currency !== 'string' ||
+        !/^[A-Z]{3}$/.test(it.currency) ||
+        (Array.isArray(F.CURRENCIES) && !F.CURRENCIES.some(c => c.code === it.currency)))) {
+      issues.push('币种无效，请核对')
+    } else if (it.currency && acc && it.currency !== (acc.currency || 'CNY')) {
+      issues.push('币种与账户不符，请核对；系统不会换算记账金额')
+    }
+    if (!normDate(it.date, null)) issues.push('日期无效，请核对')
+    if (!normTime(it.time, null)) issues.push('时间无效，请核对')
+    return issues
+  }
+
   /* 逐条校验多笔明细：某一条不合格只丢这一条并写进 review，不牵连其他条。
      账户与分类都缺的条目不静默写库 —— 由 UI 标红让用户补齐或单独去编辑。 */
   function validateItems(list, reference) {
@@ -269,28 +292,27 @@ window.AI = (function () {
       if (type === 'transfer') { dropped.push(no + '是本人转账，请单独记录'); return }
       const amount = normAmount(it.amount)
       if (amount === null) { dropped.push(no + '缺金额'); return }
-      const currency = typeof it.currency === 'string' && /^[A-Z]{3}$/.test(it.currency) &&
-        (!Array.isArray(F.CURRENCIES) || F.CURRENCIES.some(c => c.code === it.currency)) ? it.currency : null
+      const currency = it.currency == null ? null : it.currency
       const cat = uniqueCategory(it.category, type)
       const acc = uniqueAccount(it.account)
-      const issues = []
-      if (!cat) issues.push('分类未匹配，请选择')
-      if (!acc) issues.push('账户未明确，请选择')
-      if (currency && acc && currency !== (acc.currency || 'CNY')) issues.push('币种与账户不符，请核对')
-      rows.push({
+      const row = {
         type,
         amount,
         currency,
-        date: normDate(it.date, null) || F.dstr(now),
-        time: normTime(it.time, null) || (F.pad2(now.getHours()) + ':' + F.pad2(now.getMinutes())),
+        date: it.date == null ? F.dstr(now) : normDate(it.date, null),
+        time: it.time == null ? (F.pad2(now.getHours()) + ':' + F.pad2(now.getMinutes())) : normTime(it.time, null),
         category: cat ? categoryName(cat) : null,
         categoryId: cat ? cat.id : null,
         account: acc ? acc.name : null,
         accountId: acc ? acc.id : null,
         note: typeof it.note === 'string' ? it.note.slice(0, 60) : '',
         tags: Array.isArray(it.tags) ? it.tags.filter(t => typeof t === 'string' && t.trim()).slice(0, 3) : [],
-        issues,
-      })
+      }
+      row.issues = batchItemIssues(row)
+      if (it.date == null) addIssue(row.issues, '日期未识别，暂用本次识别当天，请核对')
+      if (it.time == null) addIssue(row.issues, '时间未识别，暂用本次识别时间，请核对')
+      if (currency === null) addIssue(row.issues, '币种未明确，按所选账户币种记录，请核对')
+      rows.push(row)
     })
     if (!rows.length) {
       return { error: '识别到的 ' + src.length + ' 笔都无法确认（' + dropped.join('、') + '），请拆开或补上金额后重试' }
@@ -303,8 +325,8 @@ window.AI = (function () {
     if (v.error) return { error: v.error }
     const review = raw.review.slice()
     if (v.dropped.length) addIssue(review, '有 ' + v.dropped.length + ' 笔无法确认已跳过：' + v.dropped.join('、'))
-    const need = v.rows.filter(r => !r.accountId || !r.categoryId).length
-    if (need) addIssue(review, '其中 ' + need + ' 笔缺账户或分类，补齐后才能记入')
+    const need = v.rows.filter(r => batchItemIssues(r).length).length
+    if (need) addIssue(review, '其中 ' + need + ' 笔未通过账户、分类、金额、日期或币种校验，请补齐后单独记录')
     if (raw.confidence === null || raw.confidence < 0.85) addIssue(review, 'AI 自评把握不足，请逐笔核对')
     return {
       data: {
@@ -461,17 +483,26 @@ window.AI = (function () {
     const value = plainObject(parsed) ? parsed : {}
     const kind = TYPES.indexOf(value.type) >= 0 ? value.type : null
     const cat = uniqueCategory(value.category, kind)
-    const acc = uniqueAccount(value.account)
+    let acc = uniqueAccount(value.account)
     let toAcc = kind === 'transfer' ? uniqueAccount(value.to_account) : null
     if (acc && toAcc && acc.id === toAcc.id) toAcc = null
     const now = new Date()
-    const amt = normAmount(value.amount)
+    let amt = normAmount(value.amount)
+    const review = Array.isArray(value.review) ? value.review.filter(x => typeof x === 'string').slice() : []
+    if (acc && value.currency && value.currency !== (acc.currency || 'CNY')) {
+      acc = null; amt = null
+      addIssue(review, '账单币种与账户不同，已留空金额和账户；请手动核对，系统未换算')
+    }
+    if (acc && toAcc && (acc.currency || 'CNY') !== (toAcc.currency || 'CNY')) {
+      toAcc = null; amt = null
+      addIssue(review, '跨币种转账需手动核对两边金额，已留空金额和转入账户')
+    }
     const tags = Array.isArray(value.tags) ? value.tags.filter(t => typeof t === 'string' && t.trim()).slice(0, 3) : []
     return {
       aiReview: true,
       aiCurrency: typeof value.currency === 'string' && /^[A-Z]{3}$/.test(value.currency) &&
         (!Array.isArray(F.CURRENCIES) || F.CURRENCIES.some(c => c.code === value.currency)) ? value.currency : null,
-      aiReviewIssues: Array.isArray(value.review) ? value.review.filter(x => typeof x === 'string').slice() : [],
+      aiReviewIssues: review,
       type: kind, amount: amt === null ? '' : String(amt),
       categoryId: cat ? cat.id : null, accountId: acc ? acc.id : null,
       toAccountId: toAcc ? toAcc.id : null,
@@ -489,12 +520,11 @@ window.AI = (function () {
   function mapItemsToRows(items) {
     const rows = [], blocked = []
     ;(Array.isArray(items) ? items : []).forEach(it => {
-      if (!it || !it.accountId || !it.categoryId || !(it.amount > 0) ||
-          TYPES.indexOf(it.type) < 0 || it.type === 'transfer') { if (it) blocked.push(it); return }
+      if (batchItemIssues(it).length) { if (it) blocked.push(it); return }
       rows.push({
         txn_type: it.type,
-        amount: it.amount,
-        occurred_at: F.iso(F.parseInput(it.date + 'T' + (it.time || '00:00'))),
+        amount: normAmount(it.amount),
+        occurred_at: F.iso(F.parseInput(normDate(it.date, null) + 'T' + normTime(it.time, null))),
         account_id: it.accountId,
         to_account_id: null,
         category_id: it.categoryId,
@@ -626,20 +656,23 @@ window.AI = (function () {
     function showMultiReview(data) {
       const escape = value => F.escapeHtml(value == null ? '' : value)
       const rows = data.items || []
-      const ready = rows.filter(r => r.accountId && r.categoryId)
+      const ready = rows.filter(r => !batchItemIssues(r).length)
       const listHtml = rows.map((r, i) => {
-        const bad = !r.accountId || !r.categoryId
+        const currentIssues = batchItemIssues(r)
+        const issues = Array.from(new Set((r.issues || []).concat(currentIssues)))
+        const acc = accounts().find(a => a.id === r.accountId)
+        const currency = typeof r.currency === 'string' ? r.currency : (acc && acc.currency || 'CNY')
         return '<div style="padding:8px 0;border-bottom:1px solid var(--line)">' +
           '<div class="small"><b>' + escape(r.note || ('第' + (i + 1) + '笔')) + '</b>' +
-          '<span class="muted"> · ' + (r.type === 'income' ? '收入' : '支出') + ' ¥' + escape(String(r.amount)) + '</span></div>' +
+          '<span class="muted"> · ' + (r.type === 'income' ? '收入' : '支出') + ' ' + escape(currency) + ' ' + escape(String(r.amount)) + '</span></div>' +
           '<div class="tiny muted">' + escape(r.category || '未匹配分类') + ' · ' + escape(r.account || '未匹配账户') +
           ' · ' + escape(r.date) + '</div>' +
-          (bad ? '<div class="tiny err">' + escape(r.issues.join('；') || '需补齐') + '</div>' : '') +
+          (issues.length ? '<div class="tiny ' + (currentIssues.length ? 'err' : 'muted') + '">' + escape(issues.join('；')) + '</div>' : '') +
           '</div>'
       }).join('')
       const issues = data.review.length ? data.review : ['请逐笔核对金额、分类与账户']
       el('aiReview').innerHTML = '<div class="card" style="padding:12px"><b>识别到 ' + rows.length + ' 笔 · 待核对</b>' +
-        '<div class="small muted" style="margin-top:4px">可一次记入 ' + ready.length + ' 笔；缺账户或分类的先补齐，或单独去编辑。</div>' +
+        '<div class="small muted" style="margin-top:4px">可一次记入 ' + ready.length + ' 笔；未通过校验的请核对后单独记录。</div>' +
         '<div style="margin-top:6px">' + listHtml + '</div>' +
         '<ul class="small" style="padding-left:20px;margin:10px 0">' + issues.map(x => '<li>' + escape(x) + '</li>').join('') + '</ul>' +
         '<button class="btn block" id="aiBatch"' + (ready.length ? '' : ' disabled') + '>确认记入 ' + ready.length + ' 笔</button>' +
@@ -649,7 +682,12 @@ window.AI = (function () {
       if (btn) btn.addEventListener('click', async () => {
         if (!active() || btn.disabled) return
         const mapped = mapItemsToRows(rows)
-        if (!mapped.rows.length) { el('aiErr').textContent = '没有可记入的条目，请补齐账户和分类'; return }
+        if (rows.some(r => ready.includes(r) !== !batchItemIssues(r).length)) {
+          el('aiErr').textContent = '账户或分类已变化，请重新核对识别结果'
+          showMultiReview(data)
+          return
+        }
+        if (!mapped.rows.length) { el('aiErr').textContent = '没有可记入的条目，请核对账户、分类、金额、日期和币种'; return }
         btn.disabled = true
         btn.textContent = '正在记入…'
         let done = 0
@@ -703,3 +741,4 @@ window.AI = (function () {
     get SYSTEM() { return AI_SYSTEM },
   }
 })()
+

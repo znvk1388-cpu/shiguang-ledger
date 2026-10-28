@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="拾光记账">
+  <rect width="512" height="512" fill="#2f6bef"/>
+  <rect x="134" y="132" width="244" height="264" rx="34" fill="#ffffff"/>
+  <path d="M190 132v264" stroke="#dbe6ff" stroke-width="12"/>
+  <path d="M226 294h106M226 334h70" fill="none" stroke="#2f6bef" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="284" cy="220" r="29" fill="#ffcb66"/>
+  <path d="M284 169v-10m0 122v-10m-51-51h-10m122 0h-10m-87-36-7-7m86 86-7-7m0-72 7-7m-86 86 7-7" stroke="#ffcb66" stroke-width="10" stroke-linecap="round"/>
+</svg>

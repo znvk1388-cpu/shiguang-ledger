@@ -857,6 +857,10 @@ window.Wealth = (function () {
     const items = []
     let inflow = 0
     let outflow = 0
+    const accounts = {}
+    S.allAccounts().forEach(a => { accounts[a.id] = a })
+    const isCash = a => !!a && !isCredit(a) && !isDebtAccount(a)
+    const baseAmount = (cents, a) => F.toBase(cents, (a && a.currency) || 'CNY')
     try {
       const rules = await S.listRecurring()
       ;(rules || []).forEach(r => {
@@ -867,15 +871,31 @@ window.Wealth = (function () {
         while (due && guard++ < 60) {
           const d = F.ymdLocal(due)
           if (d >= end) break
-          const cents = F.toCents(r.amount)
+          const amount = F.toCents(r.amount)
+          const fromAccount = accounts[r.account_id]
+          const toAccount = accounts[r.to_account_id]
+          let cents = baseAmount(amount, fromAccount)
+          let cashDelta = 0
+          if (r.txn_type === 'transfer') {
+            /* 现金账户互转不改变现金总额；还信用卡/借贷则按现金一侧的币种折算。 */
+            if (isCash(fromAccount) && !isCash(toAccount)) cashDelta = -cents
+            else if (!isCash(fromAccount) && isCash(toAccount)) {
+              cents = baseAmount(amount, toAccount)
+              cashDelta = cents
+            }
+          } else if (isCash(fromAccount)) {
+            if (r.txn_type === 'income') cashDelta = cents
+            else if (r.txn_type === 'expense') cashDelta = -cents
+          }
           const name = r.note || (r.category_id ? S.categoryName(r.category_id) : (window.TXN_TYPE_LABEL[r.txn_type] || '周期账目'))
           items.push({
             date: due, name: name, cents: cents,
-            dir: r.txn_type === 'income' ? 'in' : 'out',
+            dir: cashDelta > 0 ? 'in' : cashDelta < 0 ? 'out' : 'neutral',
+            txnType: r.txn_type,
             late: d < today,
           })
-          if (r.txn_type === 'income') inflow += cents
-          else outflow += cents
+          if (cashDelta > 0) inflow += cashDelta
+          else if (cashDelta < 0) outflow -= cashDelta
           if (r.freq === 'daily' || r.freq === 'weekly') due = F.nextDue(due, String(r.start_date).slice(0, 10), r.freq)
           else break
         }
@@ -888,8 +908,8 @@ window.Wealth = (function () {
       const bal = await S.accountBalances()
       ;(bal || []).forEach(b => {
         const a = b.account || {}
-        if (a.kind === 'credit' || isDebtAccount(a)) return
-        cash += Number(b.balance) || 0   /* accountBalances() 的 balance 已经是「分」 */
+        if (!isCash(a)) return
+        cash += baseAmount(Number(b.balance) || 0, a)
       })
     } catch (e) { /* 余额读不到就给 0，预测只显示收支差 */ }
     return { items, inflow, outflow, cash, end, span }
@@ -897,6 +917,7 @@ window.Wealth = (function () {
 
   async function openForecast() {
     const st = window.App.state
+    const sym = esc(F.currencySym(F.baseCurrency()))
     const today = new Date()
     const monthKey = F.monthKey(new Date(today.getFullYear(), today.getMonth(), 1))
     const bud = S.budgetOf(monthKey, null)
@@ -924,9 +945,9 @@ window.Wealth = (function () {
 
     const dailyBlock = total > 0
       ? '<div class="fc-daily"><div class="k">今天还能花</div>' +
-        '<div class="v num' + (daily < 0 ? ' over' : '') + '">¥' + F.yuan(Math.max(daily, 0)) + '</div>' +
+        '<div class="v num' + (daily < 0 ? ' over' : '') + '">' + sym + F.yuan(Math.max(daily, 0)) + '</div>' +
         '<div class="small muted">本月还剩 ' + daysLeft + ' 天 · 已用 ' + Math.round(spent / total * 100) + '%' +
-        (monthOut > 0 ? ' · 已排期固定支出 ¥' + F.yuan(monthOut) : '') + '</div></div>'
+        (monthOut > 0 ? ' · 已排期现金流出 ' + sym + F.yuan(monthOut) : '') + '</div></div>'
       : '<div class="fc-daily"><div class="k">还没设本月预算</div>' +
         '<div class="small muted">设了预算才能算出「今天还能花多少」</div>' +
         '<button class="btn sm line" id="fcSetBudget" style="margin-top:8px">设预算</button></div>'
@@ -947,19 +968,23 @@ window.Wealth = (function () {
           const rel = diff < 0 ? '逾期 ' + Math.abs(diff) + ' 天' : diff === 0 ? '今天' : diff === 1 ? '明天' : diff + ' 天后'
           list += '<div class="fc-day">' + it.date.slice(5) + ' 周' + wd + ' · ' + rel + '</div>'
         }
+        const label = it.dir === 'neutral' ? '现金总额不变'
+          : it.txnType === 'transfer' ? (it.dir === 'in' ? '转入现金' : '转出现金')
+          : it.dir === 'in' ? '收入' : '支出'
+        const sign = it.dir === 'in' ? '+' : it.dir === 'out' ? '−' : '⇄'
         list += '<div class="list-item fc-row"><div class="ico">' + (it.dir === 'in' ? '💰' : ic('repeat')) + '</div>' +
           '<div class="grow" style="min-width:0"><div class="ellipsis">' + esc(it.name) + '</div>' +
-          '<div class="small muted">' + (it.dir === 'in' ? '收入' : '支出') + (it.late ? ' · 已到期未补记' : '') + '</div></div>' +
-          '<span class="num ' + (it.dir === 'in' ? 'in' : 'out') + '" style="flex:none">' +
-          (it.dir === 'in' ? '+' : '−') + '¥' + F.yuan(it.cents) + '</span></div>'
+          '<div class="small muted">' + label + (it.late ? ' · 已到期未补记' : '') + '</div></div>' +
+          '<span class="num ' + (it.dir === 'neutral' ? 'muted' : it.dir) + '" style="flex:none">' +
+          sign + sym + F.yuan(it.cents) + '</span></div>'
       })
     }
 
     const foot = '<div class="fc-sum">' +
-      '<div class="between"><span>预计收入</span><span class="num in">+' + F.yuan(fc.inflow) + '</span></div>' +
-      '<div class="between"><span>预计支出</span><span class="num out">−' + F.yuan(fc.outflow) + '</span></div>' +
-      '<div class="between fc-total"><span>30 天后余额</span><span class="num">¥' + F.yuan(projBalance) + '</span></div>' +
-      '<div class="tiny muted" style="margin-top:6px">按当前账户余额 ¥' + F.yuan(fc.cash) + ' 加上周期账目推算，不含临时消费。</div>' +
+      '<div class="between"><span>预计现金流入</span><span class="num in">+' + sym + F.yuan(fc.inflow) + '</span></div>' +
+      '<div class="between"><span>预计现金流出</span><span class="num out">−' + sym + F.yuan(fc.outflow) + '</span></div>' +
+      '<div class="between fc-total"><span>30 天后余额</span><span class="num">' + sym + F.yuan(projBalance) + '</span></div>' +
+      '<div class="tiny muted" style="margin-top:6px">按当前可用现金 ' + sym + F.yuan(fc.cash) + ' 加上周期账目推算，不含临时消费。</div>' +
       '</div>'
 
     /* 样式随弹层一起注入：这块只在这个面板里用，放 app.css 会白占首屏 gzip 预算 */
@@ -1443,3 +1468,4 @@ window.Wealth = (function () {
     openForecast, forecastData, openGoalEditor, openDebtPlan, debtItems, planSim, openBudgetCalendar,
   }
 })()
+

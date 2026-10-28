@@ -1,5 +1,5 @@
 /* 拾光记账 · 离线缓存（仅缓存应用静态资源，云端数据请求直连） */
-const CACHE = 'ledger10-v41'
+const CACHE = 'ledger10-v42'
 
 /* 首屏必需：index.html 里 <script defer> 引的那些 + 样式 + 图标。
    串行安装时按这个顺序先装，中途断网也能离线启动。 */
@@ -25,23 +25,20 @@ const CORE_LAZY = [
 ]
 
 const CORE = CORE_SHELL.concat(CORE_LAZY)
+const APP_ROOT = new URL('./', self.location.href).pathname
+const APP_INDEX = new URL('./index.html', self.location.href).pathname
+const STATIC_URLS = new Set(CORE.map(u => new URL(u, self.location.href).href))
 
 /* 新版本先进入 waiting，由页面上的「立即更新」提示决定何时切换，
    避免用户正开着旧页面时资源被悄悄换掉 */
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE)
-    /* 逐个缓存，不用 addAll 一把梭。两个原因（都是 v1.16.0 线上实测踩到的）：
-       1) addAll 是原子的：40+ 个文件里任意一个请求失败，整个 install 就失败、
-          旧缓存还被删掉，SW 永远激活不了，离线能力全丢。逐个缓存时单个文件
-          失败只跳过它，首用时会经下面的 fetch 处理器自动补进缓存。
-       2) 平台不压缩传输、链路慢（10~50KB/s）：40 个文件并发突发会把页面自己的
-          首屏脚本带宽抢干，实测 ui.js/app.js 被拖到 10s+、懒加载模块 30s+。
-          串行下载总时长不变（瓶颈在链路），但页面请求能公平拿到带宽。 */
+    /* 串行下载，避免抢占首屏带宽。任何必需资源失败都让安装失败，
+       浏览器继续保留旧 worker 和旧缓存；不把不完整的新版本标为已就绪。
+       清理旧缓存只发生在完整安装后的 activate。 */
     for (const u of CORE) {
-      try {
-        await cache.add(new Request(u, { cache: 'reload' }))
-      } catch (err) { /* 跳过，稍后首用补缓存 */ }
+      await cache.add(new Request(u, { cache: 'reload' }))
     }
   })())
 })
@@ -63,34 +60,30 @@ self.addEventListener('fetch', e => {
   if (url.origin !== self.location.origin) return
   if (url.pathname.indexOf('/.cloud/') === 0) return
 
-  /* 页面导航走「网络优先」，保证拿到最新入口；断网时回退到缓存首页 */
+  /* 页面和脚本使用同一个已激活版本，不能先下载新首页却仍加载旧脚本。
+     查询参数仍由页面处理；其它路径的文档/下载不应被替换成应用首页。 */
   if (req.mode === 'navigate') {
+    if (url.pathname !== APP_ROOT && url.pathname !== APP_INDEX) return
     e.respondWith(
-      fetch(req).then(res => {
-        if (res && res.status === 200 && res.type === 'basic') {
-          const copy = res.clone()
-          caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {})
-        }
-        return res
-      }).catch(() =>
-        caches.match(req)
-          .then(hit => hit || caches.match('./index.html'))
-          .then(hit => hit || caches.match('./'))
-      )
+      caches.open(CACHE).then(async cache =>
+        await cache.match('./index.html') || await cache.match('./') || fetch(req))
     )
     return
   }
 
-  /* 静态资源走「缓存优先」，离线可用 */
+  /* 只缓存明确列出的应用文件，云端接口和其它同源数据不进入离线缓存。
+     命中时不后台刷新：新资源应由新 worker 完整安装后切换，不能改写旧版本。 */
+  if (!STATIC_URLS.has(url.href)) return
   e.respondWith(
-    caches.open(CACHE).then(cache =>
-      cache.match(req).then(hit => {
-        const net = fetch(req).then(res => {
-          if (res && res.status === 200 && res.type === 'basic') cache.put(req, res.clone())
-          return res
-        }).catch(() => hit)
-        return hit || net
-      })
-    )
+    caches.open(CACHE).then(async cache => {
+      const hit = await cache.match(req)
+      if (hit) return hit
+      const res = await fetch(req)
+      if (res && res.status === 200 && res.type === 'basic') {
+        try { await cache.put(req, res.clone()) } catch (e) { /* 空间不足时仍可使用网络响应 */ }
+      }
+      return res
+    })
   )
 })
+
