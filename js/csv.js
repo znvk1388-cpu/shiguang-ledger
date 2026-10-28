@@ -55,7 +55,7 @@
     return '现金'
   }
 
-  /* map：可选的手动列映射 { hi, date, amount, type, note, account, category, order }（列下标）。
+  /* map：可选的手动列映射 { hi, date, amount, type, note, account, toAccount, category, order }（列下标）。
      任意银行 / 平台的 CSV 只要表头对不上，就走这里（ezBookkeeping 的做法）。 */
   function parse(text, papa, fmt, map) {
     if (!papa || typeof papa.parse !== 'function') throw new Error('CSV 解析组件未加载，请刷新页面后重试')
@@ -80,7 +80,8 @@
       iNote = map.note != null ? map.note : -1
       iAccount = map.account != null ? map.account : -1
       iCategory = map.category != null ? map.category : -1
-      iTo = -1; iPeer = -1; iTags = -1
+      iTo = map.toAccount != null && map.toAccount >= 0 ? map.toAccount : -1
+      iPeer = -1; iTags = -1
       ordCols = map.order != null && map.order >= 0 ? [map.order] : []
       if (!(iDate >= 0) || !(iAmount >= 0)) throw new Error('手动映射缺少日期或金额列')
     } else {
@@ -116,7 +117,7 @@
         .map(name => head.indexOf(name)).filter(i => i >= 0)
     }
     const types = { 支出: 'expense', 收入: 'income', 转账: 'transfer' }
-    if (!app) { types.转出 = 'expense'; types.转入 = 'income'; delete types.转账 }
+    if (!app) { types.转出 = 'expense'; types.转入 = 'income'; if (!map || iTo < 0) delete types.转账 }
     const rows = [], skippedRows = [], reasons = {}, seen = new Set()
     let sameFileDuplicates = 0
     let withOrder = 0
@@ -126,7 +127,7 @@
     }
     for (let i = headerIndex + 1; i < data.length; i++) {
       const cols = data[i]
-      /* 手动映射可能没有「收支」列：没有就按支出处理，用户可在预览里改 */
+      /* 手动映射没有「收支」列时按支出处理，界面在映射处明确告知。 */
       const typeName = iType >= 0 ? clean(cols[iType]) : '支出'
       const type = Object.prototype.hasOwnProperty.call(types, typeName) ? types[typeName] : null
       if (!type) { skip(i + 1, '非收支记录或类型无法识别'); continue }
@@ -150,7 +151,10 @@
       const key = orderNo
         ? 'ord|' + orderNo
         : type + '|' + cents + '|' + fmt.isoDay(occurred) + '|' + note
-      if (seen.has(key)) sameFileDuplicates++
+      if (seen.has(key)) {
+        if (orderNo) row.fileOrderDuplicate = true
+        else sameFileDuplicates++
+      }
       seen.add(key)
       if (orderNo) withOrder++
       rows.push(row)
@@ -264,6 +268,7 @@
     ['note', ['商品', '商品说明', '备注', '摘要', '交易说明', '用途']],
     ['category', ['交易分类', '分类', '类别']],
     ['account', ['收/付款方式', '支付方式', '账户', '卡号', '付款方式']],
+    ['toAccount', ['目标账户', '转入账户', '收款账户']],
     ['order', ['交易单号', '交易订单号', '商户单号', '订单号', '单号']],
   ]
   function guessMap(head) {
@@ -299,6 +304,7 @@
       sel('note', '备注列', '', true) +
       sel('category', '分类列', '', true) +
       sel('account', '账户列', '', true) +
+      sel('toAccount', '转入账户列', '转账时必填', true) +
       sel('order', '交易单号列', '用于去重', true) +
       '<div class="err" id="cmErr"></div>' +
       '<button class="btn block" id="cmGo">按这个映射导入</button>'
@@ -409,6 +415,7 @@
   /* 兼容旧调用（测试/脚本）：解析后直接落库，返回成功笔数 */
   async function importCsvText(text) {
     const parsed = parseCsvText(text)
+    if (parsed.rows.some(r => r.fileOrderDuplicate)) throw new Error('文件内单号重复，请使用导入预览逐笔核对')
     const res = await commitRows(parsed.rows)
     return res.ok
   }
@@ -495,10 +502,11 @@
       if (r.orderNo) {
         r.dup = dupSet.ords.has(r.orderNo)
         if (r.dup) ordHit++
+        if (!r.dup && r.fileOrderDuplicate) r.dup = true
       } else {
         r.dup = dupSet.keys.has(k)
       }
-      r.uncertain = !!(r.dup && !r.orderNo)
+      r.uncertain = !!(r.dup && (!r.orderNo || (r.fileOrderDuplicate && !dupSet.ords.has(r.orderNo))))
       if (r.dup) dupCount++
     })
 
@@ -559,7 +567,7 @@
       return '<div class="list-item" style="padding:9px 12px">' +
         '<div class="grow"><div class="small ellipsis">' + esc(r.note || r.categoryName || '（无备注）') + '</div>' +
         '<div class="tiny muted">' + r.occurred.slice(0, 10) + ' · ' + esc(r.accountName || '—') + ' · ' + esc(r.categoryName || '未分类') + '</div></div>' +
-        (r.dup ? '<span class="pill pill-exp">' + (r.uncertain ? '疑似重复' : '单号重复') + '</span>' : '') +
+        (r.dup ? '<span class="pill pill-exp">' + (r.uncertain ? (r.fileOrderDuplicate ? '文件内单号重复' : '疑似重复') : '单号重复') + '</span>' : '') +
         '<span class="num small" style="color:' + color + '">' + sign + F().money(F().toCents(r.amount)) + '</span>' +
         '</div>'
     }).join('')
@@ -580,9 +588,9 @@
       (parsed.report && parsed.report.sameFileDuplicates
         ? '<div class="card small" style="color:var(--warn)">同文件内有 ' + parsed.report.sameFileDuplicates +
         ' 笔与其他记录的日期、类型、金额、备注相同。请核对原账单；这些记录仍会保留导入。</div>' : '') +
-      (dupCount > ordHit ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">没有交易单号，只能按日期、金额和备注推测；相同消费也可能是真实的不同账目。</div>' +
+      (dupCount > ordHit ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">无单号的记录按日期、金额和备注推测；文件内单号重复也需核对，可能是同一订单的不同记录。</div>' +
         rows.map((r, i) => r.uncertain ? '<label class="list-item"><input type="checkbox" data-import-uncertain="' + i + '"><span class="grow small">' +
-          esc(r.occurred.slice(0, 10)) + ' · ' + esc(r.note || '无备注') + ' · ' + F().money(F().toCents(r.amount)) + ' · 仍要导入</span></label>' : '').join('') + '</div>' : '') +
+          (r.fileOrderDuplicate ? '文件内单号重复 · ' : '') + esc(r.occurred.slice(0, 10)) + ' · ' + esc(r.note || '无备注') + ' · ' + F().money(F().toCents(r.amount)) + ' · 仍要导入</span></label>' : '').join('') + '</div>' : '') +
       '<p class="small muted">目标账本：<b>' + esc(S().bookName(scopeBook) || '默认账本') + '</b>。CSV 中的账本列仅供参考，本次全部写入此账本。</p>' +
       '<p class="small muted">导入中关闭面板会停止后续记录；正在保存的一笔可能完成。已成功记录不会在本面板重试时重复写入。</p>' +
       (autoMapped.length

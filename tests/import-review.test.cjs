@@ -4,6 +4,67 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { JSDOM } = require('jsdom')
 
+test('same order number within the file is presented for manual review and is not imported by default', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window, writes = []
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.App = { refresh: async () => {} }
+  w.DB = { mode: 'guest', state: { categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    bookName: () => '日常', rootCategories: () => [], allAccounts: () => [],
+    listTransactions: async () => ({ rows: [] }),
+    addTransaction: async row => { writes.push(row); return { id: writes.length } } }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const parsed = w.LedgerCsv.parseCsvText('日期,类型,金额,备注,交易单号\n2026-10-28,支出,10,咖啡,abc\n2026-10-28,支出,10,咖啡,abc\n2026-10-28,支出,10,咖啡,\n2026-10-28,支出,10,咖啡,')
+  assert.equal(parsed.rows.length, 4)
+  await assert.rejects(w.LedgerCsv.importCsvText('日期,类型,金额,备注,交易单号\n2026-10-28,支出,10,咖啡,abc\n2026-10-28,支出,10,咖啡,abc'), /逐笔核对/)
+  await w.LedgerCsv.openImportPreview(parsed, '测试.csv')
+  assert.match(w.document.querySelector('#sheet').textContent, /文件内单号重复/)
+  assert.match(w.document.querySelector('#impRun').textContent, /3 笔/)
+  w.document.querySelector('#impRun').click()
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(writes.length, 3)
+})
+
+test('custom column mapping supports explicit transfer and destination account', () => {
+  const dom = new JSDOM('', { url: 'https://test.local', runScripts: 'outside-only' })
+  try {
+    const w = dom.window
+    for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+    const result = w.LedgerCsv.parseCsvText('日期列,类型列,金额列,转出,转入\n2026-10-28,转账,20,微信,银行卡', { hi: 0, date: 0, type: 1, amount: 2, account: 3, toAccount: 4 })
+    assert.equal(result.rows.length, 1)
+    assert.equal(result.rows[0].type, 'transfer')
+    assert.equal(result.rows[0].toAccountName, '银行卡')
+  } finally { dom.window.close() }
+})
+
+test('custom column selector exposes destination account and mapped transfer saves both account IDs', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window, writes = []
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.App = { refresh: async () => {} }
+  const accounts = [{ id: 1, name: '微信' }, { id: 2, name: '银行卡' }]
+  w.DB = { mode: 'guest', state: { categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    bookName: () => '日常', rootCategories: () => [], allAccounts: () => accounts,
+    listTransactions: async () => ({ rows: [] }),
+    addTransaction: async row => { writes.push(row); return { id: writes.length } } }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  w.LedgerCsv.openColumnMap('日期列,类型列,金额列,转出,转入\n2026-10-28,转账,20,微信,银行卡', '测试.csv')
+  for (const [name, value] of Object.entries({ date: 0, type: 1, amount: 2, account: 3, toAccount: 4 })) w.document.querySelector('[data-cm="' + name + '"]').value = String(value)
+  w.document.querySelector('#cmGo').click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.match(w.document.querySelector('#sheet').textContent, /转账 1/)
+  w.document.querySelector('#impRun').click()
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].account_id, 1)
+  assert.equal(writes[0].to_account_id, 2)
+  assert.equal(writes[0].txn_type, 'transfer')
+})
+
 test('user can import a selected uncertain match while an order-number duplicate stays excluded', async t => {
   const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
   t.after(() => dom.window.close())
