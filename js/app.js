@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.7'
+  const VERSION = '1.18.8'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -500,6 +500,9 @@ window.App = (function () {
     })
     /* 统计页的分类排行 / 环形图图例：点击跳到明细并按该分类筛选 */
     const jumpCat = (id) => {
+      const hadOtherFilters = !!(state.filters.accountId || state.filters.keyword || state.filters.tag ||
+        state.filters.minAmount || state.filters.maxAmount || state.filters.reimbursable)
+      Object.assign(state.filters, { accountId: null, keyword: '', tag: '', minAmount: '', maxAmount: '', reimbursable: false })
       state.filters.categoryId = id
       state.filters.type = 'expense'
       state.calDay = null
@@ -508,7 +511,7 @@ window.App = (function () {
       if (state.statRange === 'year') state.scope = 'year'
       else if (state.statRange === 'month') state.scope = 'month'
       setTab('home')
-      UI.toast('已按「' + S.categoryName(id) + '」筛选明细')
+      UI.toast('已按「' + S.categoryName(id) + '」筛选明细' + (hadOtherFilters ? '，并清除其他筛选' : ''))
     }
     $$('#content [data-cat]').forEach(el => {
       bindOnce(el, 'click', () => jumpCat(Number(el.getAttribute('data-cat'))))

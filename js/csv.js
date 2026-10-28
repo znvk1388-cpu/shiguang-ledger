@@ -52,7 +52,8 @@
     if (/微信|零钱/.test(name)) return '微信'
     if (/支付宝|余额宝|花呗/.test(name)) return '支付宝'
     if (/银行|储蓄|信用|卡/.test(name)) return '银行卡'
-    return '现金'
+    if (/现金/.test(name)) return '现金'
+    return null
   }
 
   /* map：可选的手动列映射 { hi, date, amount, type, note, account, toAccount, category, order }（列下标）。
@@ -136,11 +137,14 @@
       const occurred = parseDate(cols[iDate], fmt)
       if (!occurred) { skip(i + 1, '日期无效'); continue }
       const note = app ? clean(cols[iNote]) : [cols[iNote], cols[iPeer]].map(clean).filter(Boolean).join(' · ')
-      let orderNo = ''
-      for (const idx of ordCols) { const v = clean(cols[idx]); if (v) { orderNo = v; break } }
+      let orderNo = '', orderField = ''
+      for (const idx of ordCols) { const v = clean(cols[idx]); if (v) { orderNo = v; orderField = head[idx]; break } }
+      const rawAccount = clean(cols[iAccount])
+      const guessedAccount = (app || map) ? rawAccount : guessAccount(rawAccount)
       const row = {
-        type, amount: cents / 100, cents, occurred, orderNo,
-        accountName: (app || map) ? clean(cols[iAccount]) : guessAccount(clean(cols[iAccount])),
+        type, amount: cents / 100, cents, occurred, orderNo, orderField,
+        accountName: (app || map) ? rawAccount : (guessedAccount || rawAccount || '（账单未提供支付方式）'), accountSourceRaw: rawAccount,
+        accountNeedsConfirm: !(app || map) && !guessedAccount,
         toAccountName: type === 'transfer' ? clean(cols[iTo]) : null,
         categoryName: clean(cols[iCategory]), note,
         tags: app ? clean(cols[iTags]).split(/\s+/).filter(Boolean) : [],
@@ -363,9 +367,11 @@
           }
           /* 云端响应丢失时也用现有操作标记核实，查重失败不会再次提交。 */
           const tracked = mode === 'cloud' && typeof S().hasOp === 'function' && typeof S().opTag === 'function'
-          if (tracked && state.attempted && await S().hasOp('transactions', state.opId)) { state.done = true; return }
+          if (tracked && state.attempted && await S().hasOp('transactions', state.opId)) { r.resultAccountId = state.resultAccountId; state.done = true; return }
           if (!active()) return
           const accountId = r.accountId != null ? mappedAccount(r.accountId) : await findOrCreateAccount(r.accountName || '')
+          r.resultAccountId = accountId
+          state.resultAccountId = accountId
           if (!active()) return
           let categoryId = r.categoryId || null
           if (!categoryId && !r.skipCat && r.categoryName) categoryId = await findOrCreateCategory(r.categoryName, r.type)
@@ -414,9 +420,17 @@
 
   /* 兼容旧调用（测试/脚本）：解析后直接落库，返回成功笔数 */
   async function importCsvText(text) {
+    const scopeMode = S().mode, scopeBook = S().currentBookId(), scopeIdentity = importIdentity()
+    const active = () => S().mode === scopeMode && S().currentBookId() === scopeBook && importIdentity() === scopeIdentity
     const parsed = parseCsvText(text)
     if (parsed.rows.some(r => r.fileOrderDuplicate)) throw new Error('文件内单号重复，请使用导入预览逐笔核对')
-    const res = await commitRows(parsed.rows)
+    if (parsed.rows.some(r => r.accountNeedsConfirm)) throw new Error('请在导入预览中确认支付账户')
+    const existing = await detectDuplicates(parsed.rows, scopeBook)
+    if (!active()) throw new Error('账号或账本已切换，请重新导入')
+    if (parsed.rows.some(r => r.orderNo ? existing.ords.has(r.orderNo) : existing.keys.has(r.type + '|' + F().toCents(r.amount) + '|' + F().isoDay(r.occurred) + '|' + (r.note || '')))) {
+      throw new Error('发现疑似重复，请使用导入预览逐笔核对')
+    }
+    const res = await commitRows(parsed.rows, { isActive: active })
     return res.ok
   }
 
@@ -494,19 +508,18 @@
     rows.forEach(r => { cnt[r.type] = (cnt[r.type] || 0) + 1 })
 
     let dupCount = 0
-    let ordHit = 0
     rows.forEach(r => {
       const k = r.type + '|' + F().toCents(r.amount) + '|' + F().isoDay(r.occurred) + '|' + (r.note || '')
       /* 有单号就只认单号：同一天两杯同价咖啡不会被误杀，
          备注被改过的同一笔也仍然认得出 */
       if (r.orderNo) {
         r.dup = dupSet.ords.has(r.orderNo)
-        if (r.dup) ordHit++
         if (!r.dup && r.fileOrderDuplicate) r.dup = true
       } else {
         r.dup = dupSet.keys.has(k)
       }
-      r.uncertain = !!(r.dup && (!r.orderNo || (r.fileOrderDuplicate && !dupSet.ords.has(r.orderNo))))
+      /* 旧记录不保存单号来源，不能确定此前存的是交易号还是商户号。 */
+      r.uncertain = !!r.dup
       if (r.dup) dupCount++
     })
 
@@ -554,12 +567,13 @@
     const accountRows = accountNames.map((name, i) => {
       const saved = Object.prototype.hasOwnProperty.call(savedAccounts, name) ? savedAccounts[name] : null
       const missing = saved != null && !S().allAccounts().some(a => String(a.id) === String(saved))
+      const required = rows.some(r => r.accountName === name && r.accountNeedsConfirm)
       const options = S().allAccounts().map(a => '<option value="' + esc(String(a.id)) + '"' +
         (saved != null && String(saved) === String(a.id) ? ' selected' : '') + '>' + esc(a.name) + '</option>').join('')
       return '<label class="row small" style="gap:8px;margin-bottom:8px"><span class="grow">' + esc(name) +
-        '</span><select class="select" data-account-map="' + i + '">' +
+        '</span><select class="select" data-account-map="' + i + '"' + (required ? ' data-account-required="true"' : '') + '>' +
         (missing ? '<option value="__missing__" selected disabled>原映射账户已不存在，请重新选择</option>' : '') +
-        '<option value="">按名称匹配或创建</option>' + options + '</select></label>'
+        '<option value="">' + (required ? '请选择实际账户' : '按名称匹配或创建') + '</option>' + options + '</select></label>'
     }).join('')
     const preview = rows.slice(0, 20).map(r => {
       const color = r.type === 'income' ? 'var(--income)' : r.type === 'transfer' ? 'var(--transfer)' : 'var(--expense)'
@@ -576,11 +590,11 @@
       '<div class="sheet-head"><span class="sheet-title">导入预览</span><button id="impClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin-bottom:10px">' + esc(fileName || '账单文件') + ' · 共解析 ' + rows.length +
       ' 笔：支出 ' + cnt.expense + ' · 收入 ' + cnt.income + (cnt.transfer ? ' · 转账 ' + cnt.transfer : '') +
-      (dupCount ? ' · <b style="color:var(--warn)">确定重复 ' + ordHit + ' 笔；疑似重复 ' + (dupCount - ordHit) + ' 笔（默认跳过）</b>' : '') + '</div>' +
+      (dupCount ? ' · <b style="color:var(--warn)">疑似重复 ' + dupCount + ' 笔（默认跳过，可逐笔选择导入）</b>' : '') + '</div>' +
       /* 幂等说明：让用户知道「再导一次不会多」是有依据的，而不是靠运气 */
       (parsed.report && parsed.report.withOrder
         ? '<div class="small muted" style="margin:-4px 0 8px">其中 ' + parsed.report.withOrder +
-          ' 笔带交易单号，按单号核对' + (ordHit ? '（已跳过 ' + ordHit + ' 笔之前导过的）' : '') + '；其余按日期+金额+备注核对。</div>'
+          ' 笔带单号，按单号核对；其余按日期+金额+备注核对。</div>'
         : '') +
       (parsed.report && parsed.report.skipped
         ? '<div class="card small">已跳过 ' + parsed.report.skipped + ' 条：' +
@@ -592,7 +606,7 @@
       (parsed.report && parsed.report.sameFileDuplicates
         ? '<div class="card small" style="color:var(--warn)">同文件内有 ' + parsed.report.sameFileDuplicates +
         ' 笔与其他记录的日期、类型、金额、备注相同。请核对原账单；这些记录仍会保留导入。</div>' : '') +
-      (dupCount > ordHit ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">无单号的记录按日期、金额和备注推测；文件内单号重复也需核对，可能是同一订单的不同记录。</div>' +
+      (dupCount ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">无单号的记录按日期、金额和备注推测；单号可能对应不同记录，请核对。</div>' +
         rows.map((r, i) => r.uncertain ? '<label class="list-item"><input type="checkbox" data-import-uncertain="' + i + '"><span class="grow small">' +
           (r.fileOrderDuplicate ? '文件内单号重复 · ' : '') + esc(F().isoLocal(r.occurred).slice(0, 16).replace('T', ' ')) +
           ' · ' + esc(r.accountName || '未指定账户') + ' · ' + esc(r.note || '无备注') +
@@ -629,7 +643,7 @@
     const runButton = document.getElementById('impRun'), closeButton = document.getElementById('impClose'), errorBox = document.getElementById('impErr')
     let running = false
     const updateRun = () => {
-      const missing = Array.from(document.querySelectorAll('#sheet [data-account-map]')).some(box => box.value === '__missing__')
+      const missing = Array.from(document.querySelectorAll('#sheet [data-account-map]')).some(box => box.value === '__missing__' || (box.hasAttribute('data-account-required') && !box.value))
       runButton.disabled = rows.length === dupCount || missing
       runButton.textContent = '确认导入 ' + (rows.length - dupCount) + ' 笔'
     }
@@ -718,7 +732,9 @@
     const esc = F().escapeHtml
     const byAcc = {}
     list.forEach(r => {
-      const k = r.accountName || '未指定账户'
+      const source = r.accountSourceRaw != null ? (r.accountSourceRaw || '账单未提供支付方式') : (r.accountName || '未指定账户')
+      const target = S().allAccounts().find(a => String(a.id) === String(r.resultAccountId))
+      const k = source + ' → ' + (target ? target.name : (r.resultAccountId == null ? '未指定账户' : '账户待核对'))
       byAcc[k] = (byAcc[k] || 0) + 1
     })
     const accRows = Object.keys(byAcc).sort((a, b) => byAcc[b] - byAcc[a])
@@ -741,7 +757,7 @@
       '<div class="row" style="gap:8px">' + stats + '</div>' +
       (accRows
         ? '<div class="card"><div class="between" style="margin-bottom:6px"><b>按账户分布</b>' +
-          '<span class="tiny muted">已按支付方式自动匹配</span></div>' + accRows + '</div>'
+          '<span class="tiny muted">来源 → 实际入账账户</span></div>' + accRows + '</div>'
         : '') +
       (autoMapped.length
         ? '<div class="card"><div class="small muted">其中 ' + autoMapped.length +

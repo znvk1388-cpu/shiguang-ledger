@@ -1,5 +1,5 @@
 /* 拾光记账 · 离线缓存（仅缓存应用静态资源，云端数据请求直连） */
-const CACHE = 'ledger10-v48'
+const CACHE = 'ledger10-v49'
 
 /* 首屏必需：index.html 里 <script defer> 引的那些 + 样式 + 图标。
    串行安装时按这个顺序先装，中途断网也能离线启动。 */

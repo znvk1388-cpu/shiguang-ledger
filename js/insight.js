@@ -36,23 +36,23 @@ window.Insight = (function () {
 
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">报表中心</span><button id="rpClose" class="btn sm line">关闭</button></div>' +
-      '<div class="list-item" id="rpAsk"><div class="ico">' + ic('send') + '</div><div class="grow"><div>AI 问账</div>' +
-      '<div class="small muted">用一句话查账，基于本机数据回答</div></div><span class="muted">›</span></div>' +
+      '<button type="button" class="list-item report-entry" id="rpAsk"><span class="ico">' + ic('send') + '</span><span class="grow"><span class="report-title">AI 问账</span>' +
+      '<span class="small muted report-title">用一句话查账，基于本机数据回答</span></span><span class="muted">›</span></button>' +
       '<div class="card" style="padding:0">' +
-      '<div class="list-item" id="rpH"><div class="ico">' + ic('heart') + '</div><div class="grow"><div>财务健康度</div>' +
-      '<div class="small muted">储蓄率 · 收支比 · 日均支出</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpAudit"><div class="ico">' + ic('search') + '</div><div class="grow"><div>消费洞察</div>' +
-      '<div class="small muted">固定支出 · 高频小额 · 环比异常</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpY"><div class="ico">' + ic('trending-up') + '</div><div class="grow"><div>年同比（YoY）</div>' +
-      '<div class="small muted">今年 vs 去年逐月对比</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpT"><div class="ico">' + ic('chart-bar') + '</div><div class="grow"><div>分类趋势</div>' +
-      '<div class="small muted">各大类近 12 个月走势</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpA"><div class="ico">' + ic('file-text') + '</div><div class="grow"><div>账户对账单</div>' +
-      '<div class="small muted">按账户导出台账（含余额）</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpG"><div class="ico">' + ic('image') + '</div><div class="grow"><div>凭证相册</div>' +
-      '<div class="small muted">所有小票图片墙</div></div><span class="muted">›</span></div>' +
-      '<div class="list-item" id="rpTag"><div class="ico">' + ic('tag') + '</div><div class="grow"><div>标签管理</div>' +
-      '<div class="small muted">重命名 · 合并 · 删除 · 报表</div></div><span class="muted">›</span></div>' +
+      '<button type="button" class="list-item report-entry" id="rpH"><span class="ico">' + ic('heart') + '</span><span class="grow"><span class="report-title">财务健康度</span>' +
+      '<span class="small muted report-title">储蓄率 · 收支比 · 日均支出</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpAudit"><span class="ico">' + ic('search') + '</span><span class="grow"><span class="report-title">消费洞察</span>' +
+      '<span class="small muted report-title">固定支出 · 高频小额 · 环比异常</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpY"><span class="ico">' + ic('trending-up') + '</span><span class="grow"><span class="report-title">年同比（YoY）</span>' +
+      '<span class="small muted report-title">今年 vs 去年逐月对比</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpT"><span class="ico">' + ic('chart-bar') + '</span><span class="grow"><span class="report-title">分类趋势</span>' +
+      '<span class="small muted report-title">各大类近 12 个月走势</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpA"><span class="ico">' + ic('file-text') + '</span><span class="grow"><span class="report-title">账户对账单</span>' +
+      '<span class="small muted report-title">查看期间收支汇总，导出流水</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpG"><span class="ico">' + ic('image') + '</span><span class="grow"><span class="report-title">凭证相册</span>' +
+      '<span class="small muted report-title">所有小票图片墙</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpTag"><span class="ico">' + ic('tag') + '</span><span class="grow"><span class="report-title">标签管理</span>' +
+      '<span class="small muted report-title">重命名 · 合并 · 删除 · 报表</span></span><span class="muted">›</span></button>' +
       '</div>' +
       '<button class="btn block" id="rpPoster">' + ic('palette') + ' 生成本月账单海报</button>' +
       '<button class="btn line block" id="rpYearImg" style="margin-top:8px">' + ic('upload') + ' 导出年度报告图片</button>' +

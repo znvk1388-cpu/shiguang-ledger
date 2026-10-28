@@ -35,13 +35,13 @@
       '<p>预算中心支持月 / 周 / 年三种周期和自动预算（基础 / 累积 / 纠偏）。' +
       '「资产」页管理账户余额、攒钱目标、借入借出与信用卡额度，还款用转账记录，不会重复计入支出。</p></div>' +
       '<div class="help-sec"><h4>⑤ 数据在哪</h4>' +
-      '<p>登录后数据在你自己的云端空间，换手机、清缓存都不丢；不登录也能用，数据只留在本机。' +
+      '<p>登录后，成功同步的账目可通过同一账号在其他设备查看；不登录时数据只留在本机。换手机或清缓存前，请先确认「数据与同步」没有待上传操作。报销进度等本机数据不会自动同步。' +
       '主动使用 AI 记账或 AI 问账时，仍会按功能页说明发送相应数据用于识别或回答。' +
       '「我的 → 导出加密文件到本机」可保存账本备份；游客备份包含图片和周期规则，登录状态的加密快照不含这些项目，本机偏好设置不包含在内。</p>' +
       '<button class="btn line sm" id="hpWhere" style="margin-top:8px">数据是怎么保管的？看一遍 →</button></div>' +
       '</div>' +
       '<div class="card"><div class="between" style="margin-bottom:8px"><b>常见问题</b></div>' +
-      '<div class="help-sec"><h4>换了手机 / 链接怎么迁？</h4><p class="muted">新设备用同一手机号 / 邮箱登录即可自动同步。数据绑的是账号不是链接——我重新发布后地址会变，登录同一账号照样能看到数据。</p></div>' +
+      '<div class="help-sec"><h4>换了手机 / 链接怎么迁？</h4><p class="muted">先在旧设备核对云端与待上传操作，再用同一账号登录新设备并核对账目。本机报销进度等数据不会自动同步，备份范围请以导出页面说明为准。</p></div>' +
       '<div class="help-sec"><h4>怎么导入微信 / 支付宝账单？</h4><p class="muted">我的 → 导入 CSV。系统会自动识别格式、预览并做重复检测，还能把未识别的分类映射到已有分类。</p></div>' +
       '<div class="help-sec"><h4>误删了怎么办？</h4><p class="muted">删除的账目会先进「回收站」，可恢复或彻底删除。</p></div>' +
       '<div class="help-sec"><h4>金额不想被看到？</h4><p class="muted">点右上角 ' + ic('eye') + ' 打开隐私模式，所有金额（含图表）会变成 ****。</p></div>' +
@@ -94,7 +94,7 @@
       '<div style="font-size:44px">' + ic('sun') + '</div>' +
       '<div style="font-size:18px;font-weight:800;margin-top:4px">拾光记账</div>' +
       '<div class="small muted">版本 ' + (window.App.version || '—') + '</div>' +
-      '<div class="small muted" style="margin-top:6px">云端存储 · 图片凭证 · 十年时光不丢</div>' +
+      '<div class="small muted" style="margin-top:6px">云端同步 · 图片凭证 · 定期备份</div>' +
       '</div>' +
       '<div class="card">' +
       '<div class="kv"><span>当前数据位置</span><b>' + (isGuest ? '本机浏览器' : '我的云端空间') + '</b></div>' +

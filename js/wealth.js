@@ -828,21 +828,24 @@ window.Wealth = (function () {
     }).join('')
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">挪钱</span><button id="bmClose" class="btn sm line">关闭</button></div>' +
-      '<div class="small muted" style="margin-bottom:12px">从「未分配」或某个分类挪额度给另一个分类，总预算不变。</div>' +
+      '<div class="small muted" style="margin-bottom:12px">从「未分配」额度分配给分类，总预算不变。分类之间调整请返回预算页核对并分别修改。</div>' +
       '<div class="field"><label>从哪来</label><select id="bmFrom" class="select">' +
-      '<option value="0">未分配额度（¥' + F.yuan(Math.max(0, total - assigned)) + '）</option>' + opts(0) + '</select></div>' +
+      '<option value="0">未分配额度（¥' + F.yuan(Math.max(0, total - assigned)) + '）</option></select></div>' +
       '<div class="field"><label>给谁</label><select id="bmTo" class="select">' + opts(0) + '</select></div>' +
       '<div class="field"><label>金额（元）</label><input id="bmAmt" class="input num" type="number" min="1" step="1" inputmode="decimal" placeholder="100"></div>' +
       '<div class="err" id="bmErr"></div><button class="btn block" id="bmSave">确认挪动</button>'
     )
     $('#bmClose').addEventListener('click', closeSheet)
+    let submitting = false
     $('#bmSave').addEventListener('click', async () => {
+      if (submitting) return
       const err = $('#bmErr')
       const fromId = Number($('#bmFrom').value)
       const toId = Number($('#bmTo').value)
       const amt = Number($('#bmAmt').value)
       if (!(amt > 0)) { err.textContent = '请输入大于 0 的金额'; return }
       if (fromId === toId) { err.textContent = '来源和目标不能是同一个分类'; return }
+      if (fromId) { err.textContent = '分类之间请返回预算页核对并分别调整，暂不支持直接挪动。'; return }
       const cents = F.toCents(amt)
       const cur = id => { const b = S.budgetOf(monthKey, id); return b != null ? F.toCents(b) : 0 }
       if (fromId) {
@@ -851,13 +854,14 @@ window.Wealth = (function () {
       } else if (cents > total - assigned) {
         err.textContent = '未分配只剩 ¥' + F.yuan(Math.max(0, total - assigned)); return
       }
+      submitting = true
+      $('#bmSave').disabled = true
       try {
-        if (fromId) await S.setBudget(monthKey, fromId, (cur(fromId) - cents) / 100)
         await S.setBudget(monthKey, toId, (cur(toId) + cents) / 100)
         closeSheet()
         toast('已挪动 ¥' + F.yuan(cents))
         window.App.refresh()
-      } catch (e) { err.textContent = '挪动失败，请重试' }
+      } catch (e) { err.textContent = '保存结果待核实，请先检查同步状态并核对分类预算，再决定是否重新操作。' }
     })
   }
 

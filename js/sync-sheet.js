@@ -68,7 +68,7 @@ window.SyncSheet = (function () {
     /* 上一次自动对齐失败：必须显式告诉用户，不能只在后台静默失败 */
     if (st.lastError) {
       warn += '<div class="card" style="border-left:3px solid var(--expense)"><div class="small"><b>上次同步未成功</b><br>' +
-        esc(st.lastError) + '<br><span class="muted">云端数据没有被改动，本机数据也没有丢。检查网络后点下方「以云端为准」重试。</span></div></div>'
+        esc(st.lastError) + '<br><span class="muted">同步结果可能尚未确认。请检查网络和云端数据，并核对下方待上传操作后再重试。</span></div></div>'
     }
     if (st.mode === 'cloud') {
       if (st.cloudError) warn += '<div class="card" style="border-left:3px solid var(--expense)"><div class="small">读取云端失败：' + esc(st.cloudError) + '</div></div>'
@@ -141,7 +141,7 @@ window.SyncSheet = (function () {
       '登录后是「在线优先」：每次记账直接写到云端，正常情况下不会出现两台设备各写各的。' +
       '回到前台 / 恢复联网时，应用会<b>自动对齐云端</b>（约每 45 秒检查一次），' +
       '账户、分类、预算、账本的改动同样会被发现，多台设备之间不需要手动刷新。' +
-      '断网时写入会失败，失败的操作会收进下面的「待上传」，不会静悄悄丢掉。' +
+      '写入失败时，请查看下面的「待上传」及操作结果；队列保存在这台设备，清除浏览器数据可能丢失。' +
       '</div>' +
       /* 风险提示：同步依赖平台后端，停服即取不回 —— 提审口径与用户告知共用同一段文案 */
       '<div class="card" style="border-left:3px solid var(--warn,#d98600)">' +
@@ -155,8 +155,8 @@ window.SyncSheet = (function () {
       '<div class="small"><b>换了设备 / 换了链接，数据怎么回来？</b><br>' +
       '1. 在新设备打开应用 → 「我的」<br>' +
       '2. 用同一个手机号 / 邮箱登录<br>' +
-      '3. 稍等几秒，应用会自动从云端拉取全部账目<br>' +
-      '<span class="muted">数据绑的是你的账号，不是某一条链接 —— 我重新发布后地址会变，登录同一账号照样能看到数据。</span>' +
+      '3. 稍等几秒，检查已同步的账目<br>' +
+      '<span class="muted">换机或清除浏览器数据前，请先确认旧设备没有待上传操作并核对云端；本机报销进度等本地数据不会自动同步。</span>' +
       '</div></div>' + banner +
       '<div class="card" style="padding:0">' + rows.map(r =>
         '<div class="list-item"><div class="grow">' + r[0] + '</div><div class="small">' + r[1] + '</div></div>').join('') + '</div>' +
@@ -291,4 +291,5 @@ window.SyncSheet = (function () {
 
   return { open: open, showConflict: showConflict }
 })()
+
 

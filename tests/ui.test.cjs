@@ -8,6 +8,74 @@ const root = path.resolve(__dirname, '..')
 const script = file => fs.readFileSync(path.join(root, file), 'utf8')
 const nextTurn = () => new Promise(resolve => setImmediate(resolve))
 
+test('editor protects changed input on close, mask and Escape while retaining input on cancel', async () => {
+  const dom = new JSDOM('<div id="sheet"></div><div id="mask"></div><div id="toast"></div>', {
+    url: 'https://ledger.test', runScripts: 'outside-only', pretendToBeVisual: true,
+  })
+  try {
+    const w = dom.window
+    w.eval(script('js/format.js'))
+    w.TXN_TYPE_LABEL = { income: '收入', expense: '支出', transfer: '转账' }
+    w.Lazy = { need: async () => null }
+    w.DB = { mode: 'guest', state: { categories: [] }, accounts: () => [], allAccounts: () => [],
+      category: () => null, rootCategories: () => [], childCategories: () => [], categoryName: () => '', accountName: () => '', budgetOf: () => null, listTemplates: async () => [] }
+    w.App = { state: { attachments: {} }, refresh: async () => {} }
+    w.eval(script('js/ui.js'))
+    let calls = 0
+    w.confirm = () => { calls++; return false }
+    await w.UI.openEditor(null)
+    w.document.querySelector('#edClose').click()
+    assert.equal(calls, 0)
+    assert.equal(w.document.querySelector('#sheet').getAttribute('aria-hidden'), 'true')
+    await w.UI.openEditor(null)
+    w.document.querySelector('#amtInput').value = '12'
+    const leaving = new w.Event('beforeunload', { cancelable: true })
+    w.dispatchEvent(leaving)
+    assert.equal(leaving.defaultPrevented, true)
+    w.document.querySelector('#edClose').click()
+    assert.equal(calls, 1)
+    assert.equal(w.document.querySelector('#amtInput').value, '12')
+    w.document.querySelector('#tplPickBtn').click()
+    await nextTurn()
+    assert.equal(calls, 2)
+    assert.ok(w.document.querySelector('#edSave'))
+    w.document.querySelector('#typeSeg button[data-etype="income"]').click()
+    assert.equal(w.document.querySelector('#amtInput').value, '12')
+    w.URL.createObjectURL = () => 'blob:test'
+    const fileInput = w.document.querySelector('#fileInput')
+    Object.defineProperty(fileInput, 'files', { value: [new w.File(['receipt'], 'receipt.png', { type: 'image/png' })] })
+    fileInput.dispatchEvent(new w.Event('change', { bubbles: true }))
+    assert.equal(w.document.querySelector('#amtInput').value, '12')
+    assert.equal(w.document.querySelectorAll('[data-removenew]').length, 1)
+    w.UI.closeSheet()
+    assert.equal(calls, 3)
+    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    assert.equal(calls, 4)
+    w.confirm = () => { calls++; return true }
+    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    assert.equal(calls, 5)
+    assert.equal(w.document.querySelector('#sheet').getAttribute('aria-hidden'), 'true')
+  } finally { dom.window.close() }
+})
+
+test('report center exposes keyboard-operable buttons and describes statement export accurately', async () => {
+  const dom = new JSDOM('<div id="sheet"></div>', { url: 'https://ledger.test', runScripts: 'outside-only' })
+  try {
+    const w = dom.window
+    w.eval(script('js/format.js'))
+    w.DB = {}
+    w.ic = () => ''
+    w.App = { state: {} }
+    w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, ic: () => '' }
+    w.eval(script('js/insight.js'))
+    await w.Insight.openReportCenter()
+    for (const id of ['rpAsk', 'rpH', 'rpAudit', 'rpY', 'rpT', 'rpA', 'rpG', 'rpTag']) {
+      assert.equal(w.document.getElementById(id).tagName, 'BUTTON')
+    }
+    assert.match(w.document.querySelector('#rpA').textContent, /查看期间收支汇总，导出流水/)
+  } finally { dom.window.close() }
+})
+
 test('amount field opens the keypad on keyboard focus and editor inputs have clear accessible names', async () => {
   const dom = new JSDOM('<div id="sheet"></div><div id="mask"></div><div id="toast"></div>', {
     url: 'https://ledger.test', runScripts: 'outside-only', pretendToBeVisual: true,
@@ -70,6 +138,7 @@ test('manual transfer blocks different currencies before writing and accepts mat
         budgetOf: () => null,
       }
       w.App = { state: { attachments: {} }, refresh: async () => {} }
+      w.confirm = () => { throw new Error('saving must not ask to discard') }
       w.eval(script('js/ui.js'))
       await w.UI.openEditor(null, 'transfer', { amount: 100, accountId: fromId, toAccountId: toId })
       w.document.querySelector('#edSave').click()

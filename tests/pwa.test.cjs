@@ -55,7 +55,7 @@ test('worker timeout and message failure let the user retry without clearing cac
 })
 
 function worker({ failAt } = {}) {
-  const handlers = new Map(), cacheNames = new Set(['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47', 'ledger10-v48', 'another-app'])
+  const handlers = new Map(), cacheNames = new Set(['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47', 'ledger10-v48', 'ledger10-v49', 'another-app'])
   const downloaded = [], deleted = []
   let claimed = false
   const context = vm.createContext({
@@ -114,8 +114,8 @@ test('all precached files exist and activation removes only old app versions', a
   for (const url of w.downloaded) assert.ok(fs.existsSync(path.join(root, url)), url)
   w.handlers.get('activate')({ waitUntil(p) { pending = p } })
   await pending
-  assert.deepEqual(w.deleted, ['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47'])
-  assert.equal(w.cacheNames.has('ledger10-v48'), true)
+  assert.deepEqual(w.deleted, ['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47', 'ledger10-v48'])
+  assert.equal(w.cacheNames.has('ledger10-v49'), true)
   assert.equal(w.cacheNames.has('another-app'), true)
   assert.equal(w.claimed(), true)
 })
