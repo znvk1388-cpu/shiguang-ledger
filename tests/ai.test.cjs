@@ -294,4 +294,3 @@ test('privacy policy and AI ask UI disclose the actual aggregates and detail lim
   ctx.w.Ask.openAskSheet()
   assert.match(ctx.w.document.getElementById('sheet').textContent, /最近 8 笔/)
 })
-
