@@ -413,6 +413,17 @@ window.Insight = (function () {
     if (!a) return
     const currency = a.currency || 'CNY'
     const money = cents => F.moneySym(cents, F.currencySym(currency))
+    const identity = () => {
+      const state = S.state || {}
+      const id = S.mode === 'cloud' ? state.uid : state.sourceId
+      return id ? JSON.stringify([S.mode, String(id), String(accountId)]) : ''
+    }
+    const scope = identity()
+    const markKey = 'ledger10_reconcile_marks_v1'
+    const marks = () => {
+      try { const all = JSON.parse(localStorage.getItem(markKey) || '{}'); return all[scope] || {} } catch (e) { return {} }
+    }
+    const signature = t => JSON.stringify([t.txn_type, t.amount, t.occurred_at, t.account_id, t.to_account_id, t.category_id, t.note, t.updated_at])
     const now = new Date()
     const defFrom = F.iso(new Date(now.getFullYear(), now.getMonth(), 1))
     const defTo = F.iso(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -420,7 +431,8 @@ window.Insight = (function () {
       const { rows } = await S.listTransactions({ from, to, accountId, limit: 100000 })
       const sorted = rows.slice().sort((x, y) => (x.occurred_at < y.occurred_at ? -1 : x.occurred_at > y.occurred_at ? 1 : x.id - y.id))
       let inflow = 0, outflow = 0
-      const lines = sorted.map(t => {
+      const savedMarks = marks()
+      const lines = sorted.map((t, index) => {
         const cents = F.toCents(t.amount)
         let delta = 0
         if (t.txn_type === 'income') delta = t.account_id === accountId ? cents : 0
@@ -433,8 +445,11 @@ window.Insight = (function () {
         const name = t.txn_type === 'transfer'
           ? (S.accountName(t.account_id) + ' → ' + S.accountName(t.to_account_id))
           : (t.category_id ? S.categoryName(t.category_id) : '未分类')
-        return '<div class="kv"><span>' + F.isoDay(t.occurred_at).slice(5) + '　' + F.escapeHtml(name) +
-          (t.note ? '<div class="tiny muted ellipsis">' + F.escapeHtml(t.note) + '</div>' : '') + '</span>' +
+        return '<div class="kv"><label><input type="checkbox" data-reconciled="' + index + '"' +
+          (scope && t.id != null ? '' : ' disabled') +
+          (scope && savedMarks[String(t.id)] === signature(t) ? ' checked' : '') +
+          ' aria-label="已核对这笔账目"> ' + F.isoDay(t.occurred_at).slice(5) + '　' + F.escapeHtml(name) +
+          (t.note ? '<div class="tiny muted ellipsis">' + F.escapeHtml(t.note) + '</div>' : '') + '</label>' +
           '<b class="num" style="color:' + (delta >= 0 ? 'var(--income)' : 'var(--expense)') + '">' +
           (delta >= 0 ? '+' : '-') + F.escapeHtml(money(Math.abs(delta))) + '</b></div>'
       }).join('')
@@ -452,11 +467,34 @@ window.Insight = (function () {
       '<div class="row"><div class="grow"><div class="small muted">期间流入</div><div id="stInflow" class="num" style="color:var(--income);font-weight:700">' + F.escapeHtml(money(r.inflow)) + '</div></div>' +
       '<div class="grow"><div class="small muted">期间流出</div><div id="stOutflow" class="num" style="color:var(--expense);font-weight:700">' + F.escapeHtml(money(r.outflow)) + '</div></div>' +
       '<div class="grow"><div class="small muted">笔数</div><div id="stCount" class="num" style="font-weight:700">' + r.count + '</div></div></div></div>' +
+      '<p class="small muted">勾选已核对的流水；标记只保存在此设备，不随云同步或备份。账目内容变化后需重新核对。</p>' +
+      (!scope ? '<p class="small muted">当前账本身份不可用，暂不能保存核对标记。</p>' : '') +
       '<div class="card" id="stBody">' + r.html + '</div>' +
       '<button class="btn line block" id="stCsv">导出对账单 CSV</button>'
     )
     document.getElementById('sClose').addEventListener('click', U().closeSheet)
     const body = document.getElementById('stBody')
+    body.addEventListener('change', event => {
+      const box = event.target
+      if (!box.matches('[data-reconciled]')) return
+      const t = r.rows[Number(box.getAttribute('data-reconciled'))]
+      if (!scope || scope !== identity() || !t || t.id == null) {
+        box.checked = false
+        U().toast('账本已变化，请重新打开对账单')
+        return
+      }
+      try {
+        const all = JSON.parse(localStorage.getItem(markKey) || '{}')
+        const scoped = all[scope] || {}
+        if (box.checked) scoped[String(t.id)] = signature(t)
+        else delete scoped[String(t.id)]
+        all[scope] = scoped
+        localStorage.setItem(markKey, JSON.stringify(all))
+      } catch (e) {
+        box.checked = !box.checked
+        U().toast('无法保存核对标记，请检查本机存储空间')
+      }
+    })
     let reloadSequence = 0
     const reload = async () => {
       const ticket = ++reloadSequence
@@ -1359,4 +1397,5 @@ window.Insight = (function () {
     buildReportImage, showReportImage, exportYearImage,
   }
 })()
+
 

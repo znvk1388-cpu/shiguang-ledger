@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.1'
+  const VERSION = '1.18.3'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -1218,4 +1218,5 @@ window.App = (function () {
     inMiniProgram: () => state.inMiniProgram,
   }
 })()
+
 

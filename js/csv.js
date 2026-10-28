@@ -178,6 +178,20 @@
   function saveImportCatMap(map) {
     try { localStorage.setItem(CATMAP_KEY, JSON.stringify(map)) } catch (e) { /* 忽略 */ }
   }
+  const ACCMAP_KEY = 'ledger10_import_accounts_v1'
+  function importIdentity() {
+    const db = S(), state = db.state || {}
+    const id = db.mode === 'cloud' ? state.uid : state.sourceId
+    return id ? JSON.stringify([db.mode, String(id)]) : ''
+  }
+  function importAccountMaps() {
+    try { return JSON.parse(localStorage.getItem(ACCMAP_KEY) || '{}') || {} } catch (e) { return {} }
+  }
+  function mappedAccount(id) {
+    const a = S().allAccounts().find(x => String(x.id) === String(id))
+    if (!a) throw new Error('映射的账户已不存在，请重新选择')
+    return a.id
+  }
   function applyRulesToImport(payload) {
     if (!window.Smart) return payload
     try { window.Smart.applyRules(payload, { fillOnly: true }) } catch (e) { /* 忽略 */ }
@@ -345,7 +359,7 @@
           const tracked = mode === 'cloud' && typeof S().hasOp === 'function' && typeof S().opTag === 'function'
           if (tracked && state.attempted && await S().hasOp('transactions', state.opId)) { state.done = true; return }
           if (!active()) return
-          const accountId = await findOrCreateAccount(r.accountName || '')
+          const accountId = r.accountId != null ? mappedAccount(r.accountId) : await findOrCreateAccount(r.accountName || '')
           if (!active()) return
           let categoryId = r.categoryId || null
           if (!categoryId && !r.skipCat && r.categoryName) categoryId = await findOrCreateCategory(r.categoryName, r.type)
@@ -356,7 +370,8 @@
           if (r.type === 'transfer' && !r.toAccountName) {
             throw new Error('转账行缺少「转入账户」，请在列映射里指定转入账户列后重新导入')
           }
-          const toAccountId = r.type === 'transfer' ? await findOrCreateAccount(r.toAccountName) : null
+          const toAccountId = r.type === 'transfer'
+            ? (r.toAccountId != null ? mappedAccount(r.toAccountId) : await findOrCreateAccount(r.toAccountName)) : null
           if (!active()) return
           const payload = {
             txn_type: r.type, amount: cents / 100, occurred_at: r.occurred,
@@ -446,12 +461,12 @@
   async function openImportPreview(parsed, fileName) {
     const rows = parsed.rows
     if (!rows.length) { U().toast('没有可导入的有效账目，请检查解析报告'); return }
-    const scopeMode = S().mode, scopeBook = S().currentBookId()
+    const scopeMode = S().mode, scopeBook = S().currentBookId(), scopeIdentity = importIdentity()
     const loadingActive = () => {
       const s = document.getElementById('sheet')
       return !!document.getElementById('impClose') && !!s &&
         s.getAttribute('aria-hidden') !== 'true' && !s.hasAttribute('inert') &&
-        S().mode === scopeMode && S().currentBookId() === scopeBook
+        S().mode === scopeMode && S().currentBookId() === scopeBook && importIdentity() === scopeIdentity
     }
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">检查导入账单</span><button id="impClose" class="btn sm line">关闭</button></div>' +
@@ -483,6 +498,7 @@
       } else {
         r.dup = dupSet.keys.has(k)
       }
+      r.uncertain = !!(r.dup && !r.orderNo)
       if (r.dup) dupCount++
     })
 
@@ -525,13 +541,22 @@
         '<option value="0">不指定（走规则）</option></select></div>'
     }).join('')
 
+    const accountNames = Array.from(new Set(rows.flatMap(r => [r.accountName, r.toAccountName]).filter(Boolean)))
+    const savedAccounts = scopeIdentity ? (importAccountMaps()[scopeIdentity] || {}) : {}
+    const accountRows = accountNames.map((name, i) => {
+      const saved = Object.prototype.hasOwnProperty.call(savedAccounts, name) ? savedAccounts[name] : null
+      const options = S().allAccounts().map(a => '<option value="' + esc(String(a.id)) + '"' +
+        (saved != null && String(saved) === String(a.id) ? ' selected' : '') + '>' + esc(a.name) + '</option>').join('')
+      return '<label class="row small" style="gap:8px;margin-bottom:8px"><span class="grow">' + esc(name) +
+        '</span><select class="select" data-account-map="' + i + '"><option value="">按名称匹配或创建</option>' + options + '</select></label>'
+    }).join('')
     const preview = rows.slice(0, 20).map(r => {
       const color = r.type === 'income' ? 'var(--income)' : r.type === 'transfer' ? 'var(--transfer)' : 'var(--expense)'
       const sign = r.type === 'income' ? '+' : r.type === 'transfer' ? '⇄' : '-'
       return '<div class="list-item" style="padding:9px 12px">' +
         '<div class="grow"><div class="small ellipsis">' + esc(r.note || r.categoryName || '（无备注）') + '</div>' +
         '<div class="tiny muted">' + r.occurred.slice(0, 10) + ' · ' + esc(r.accountName || '—') + ' · ' + esc(r.categoryName || '未分类') + '</div></div>' +
-        (r.dup ? '<span class="pill pill-exp">重复</span>' : '') +
+        (r.dup ? '<span class="pill pill-exp">' + (r.uncertain ? '疑似重复' : '单号重复') + '</span>' : '') +
         '<span class="num small" style="color:' + color + '">' + sign + F().money(F().toCents(r.amount)) + '</span>' +
         '</div>'
     }).join('')
@@ -540,7 +565,7 @@
       '<div class="sheet-head"><span class="sheet-title">导入预览</span><button id="impClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin-bottom:10px">' + esc(fileName || '账单文件') + ' · 共解析 ' + rows.length +
       ' 笔：支出 ' + cnt.expense + ' · 收入 ' + cnt.income + (cnt.transfer ? ' · 转账 ' + cnt.transfer : '') +
-      (dupCount ? ' · <b style="color:var(--warn)">疑似重复 ' + dupCount + ' 笔（将跳过）</b>' : '') + '</div>' +
+      (dupCount ? ' · <b style="color:var(--warn)">确定重复 ' + ordHit + ' 笔；疑似重复 ' + (dupCount - ordHit) + ' 笔（默认跳过）</b>' : '') + '</div>' +
       /* 幂等说明：让用户知道「再导一次不会多」是有依据的，而不是靠运气 */
       (parsed.report && parsed.report.withOrder
         ? '<div class="small muted" style="margin:-4px 0 8px">其中 ' + parsed.report.withOrder +
@@ -552,6 +577,9 @@
       (parsed.report && parsed.report.sameFileDuplicates
         ? '<div class="card small" style="color:var(--warn)">同文件内有 ' + parsed.report.sameFileDuplicates +
         ' 笔与其他记录的日期、类型、金额、备注相同。请核对原账单；这些记录仍会保留导入。</div>' : '') +
+      (dupCount > ordHit ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">没有交易单号，只能按日期、金额和备注推测；相同消费也可能是真实的不同账目。</div>' +
+        rows.map((r, i) => r.uncertain ? '<label class="list-item"><input type="checkbox" data-import-uncertain="' + i + '"><span class="grow small">' +
+          esc(r.occurred.slice(0, 10)) + ' · ' + esc(r.note || '无备注') + ' · ' + F().money(F().toCents(r.amount)) + ' · 仍要导入</span></label>' : '').join('') + '</div>' : '') +
       '<p class="small muted">目标账本：<b>' + esc(S().bookName(scopeBook) || '默认账本') + '</b>。CSV 中的账本列仅供参考，本次全部写入此账本。</p>' +
       '<p class="small muted">导入中关闭面板会停止后续记录；正在保存的一笔可能完成。已成功记录不会在本面板重试时重复写入。</p>' +
       (autoMapped.length
@@ -567,6 +595,7 @@
           '<span class="tiny muted">' + unknownList.length + ' 个未识别</span></div>' +
           '<div class="small muted" style="margin-bottom:8px">这些分类账本里还没有，选一个已有分类即可归类。</div>' + mapRows + '</div>'
         : '<div class="card"><div class="small muted">分类都能对上，无需映射。</div></div>') +
+      (accountRows ? '<div class="card"><b>账户映射</b><p class="small muted">选择已有账户可避免为支付方式创建新账户；映射仅在当前账号或本机账本记住。</p>' + accountRows + '</div>' : '') +
       '<div class="card" style="padding:0">' +
       '<div class="list-item" style="background:var(--bg)"><div class="grow small muted">前 ' + Math.min(20, rows.length) + ' 笔预览</div></div>' +
       preview + '</div>' +
@@ -578,19 +607,45 @@
       const s = document.getElementById('sheet')
       return !!document.getElementById('impRun') && !!s &&
         s.getAttribute('aria-hidden') !== 'true' && !s.hasAttribute('inert') &&
-        S().mode === scopeMode && S().currentBookId() === scopeBook
+        S().mode === scopeMode && S().currentBookId() === scopeBook && importIdentity() === scopeIdentity
     }
     const runButton = document.getElementById('impRun'), closeButton = document.getElementById('impClose'), errorBox = document.getElementById('impErr')
     let running = false
     if (rows.length === dupCount) runButton.disabled = true
+    document.querySelectorAll('#sheet [data-import-uncertain]').forEach(box => {
+      box.addEventListener('change', () => {
+        const row = rows[Number(box.getAttribute('data-import-uncertain'))]
+        row.dup = !box.checked
+        dupCount = rows.filter(r => r.dup).length
+        runButton.disabled = rows.length === dupCount
+        runButton.textContent = '确认导入 ' + (rows.length - dupCount) + ' 笔'
+      })
+    })
     closeButton.addEventListener('click', U().closeSheet)
     runButton.addEventListener('click', async () => {
       if (running || runButton.disabled || !isActive()) return
       running = true
       runButton.disabled = true
+      document.querySelectorAll('#sheet [data-import-uncertain]').forEach(box => { box.disabled = true })
       runButton.textContent = '导入中…'
       errorBox.textContent = ''
       try {
+        const selectedAccounts = Object.create(null)
+        document.querySelectorAll('#sheet [data-account-map]').forEach(sel => {
+          const name = accountNames[Number(sel.getAttribute('data-account-map'))]
+          if (sel.value) selectedAccounts[name] = mappedAccount(sel.value)
+        })
+        rows.forEach(r => {
+          r.accountId = selectedAccounts[r.accountName] ?? null
+          r.toAccountId = selectedAccounts[r.toAccountName] ?? null
+        })
+        if (scopeIdentity) {
+          const all = importAccountMaps()
+          const remembered = Object.assign(Object.create(null), all[scopeIdentity] || {})
+          accountNames.forEach(name => { delete remembered[name] })
+          all[scopeIdentity] = Object.assign(remembered, selectedAccounts)
+          try { localStorage.setItem(ACCMAP_KEY, JSON.stringify(all)) } catch (e) { /* 映射未保存不影响本次导入 */ }
+        }
         /* 应用用户选择的分类映射，并把选择记住，下次导入自动套用 */
         const learned = importCatMap()
         const userMapped = {}

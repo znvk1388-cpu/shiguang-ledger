@@ -1414,8 +1414,8 @@ window.UI = (function () {
           (a.kind === W.LOAN_IN ? '我欠别人' : '别人欠我') + '</span>' : '') + '</div>' +
         '<div class="small muted">' + sub + '</div></div>' +
         amtHtml +
-        /* 终审 3.3 / 细节 5：0 余额没有可对的账，隐藏「对账」（整行也不再放一个空动作） */
-        (debt || x.balance === 0 ? '' : '<button class="btn sm line" data-recon="' + a.id + '" style="flex:none">对账</button>') +
+        /* 即使账面为零，也可能与实际余额不符。 */
+        (debt ? '' : '<button class="btn sm line" data-recon="' + a.id + '" style="flex:none">对账</button>') +
         '</div>'
     }).join('')
 
@@ -3267,4 +3267,5 @@ window.UI = (function () {
 
 /* 各模块直接调 ic()，挂全局别名 */
 window.ic = window.UI.ic
+
 
