@@ -267,9 +267,9 @@ window.Wealth = (function () {
       '<div class="small muted">当前账面余额</div>' +
       '<div class="num" style="font-size:26px;font-weight:800">' + fmtAmount(row.balance) + ' <span class="small">' + F.escapeHtml(currency) + '</span></div>' +
       '</div>' +
-      '<div class="field"><label>实际余额（' + F.escapeHtml(currency) + '）</label><input id="rcReal" class="input num" type="number" step="0.01" inputmode="decimal" placeholder="填入银行卡 / 钱包里的真实金额"></div>' +
+      '<div class="field"><label for="rcReal">实际余额（' + F.escapeHtml(currency) + '）</label><input id="rcReal" class="input num" type="number" step="0.01" inputmode="decimal" aria-describedby="rcHint" placeholder="填入银行卡 / 钱包里的真实金额"></div>' +
       '<div class="small muted" id="rcHint" style="margin:-4px 0 12px">差额会写进期初余额并影响历史余额，请先检查漏记或重复账目。</div>' +
-      '<div class="err" id="rcErr"></div>' +
+      '<div class="err" id="rcErr" role="alert"></div>' +
       '<button class="btn block" id="rcSave">校准余额</button>' +
       (log.length ? '<div class="divider">最近校准</div>' + log.map(x =>
         '<div class="kv"><span>' + F.escapeHtml(x.at.slice(0, 16).replace('T', ' ')) + '</span>' +

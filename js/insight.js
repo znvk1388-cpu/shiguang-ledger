@@ -397,9 +397,9 @@ window.Insight = (function () {
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">账户对账单</span><button id="stClose" class="btn sm line">关闭</button></div>' +
       '<div class="card" style="padding:0">' +
-      accs.map(a => '<div class="list-item" data-sta="' + a.id + '"><div class="ico">' + F.escapeHtml(a.icon || '💰') + '</div>' +
+      accs.map(a => '<button type="button" class="list-item statement-account" data-sta="' + F.escapeHtml(String(a.id)) + '"><div class="ico">' + F.escapeHtml(a.icon || '💰') + '</div>' +
         '<div class="grow"><div>' + F.escapeHtml(a.name) + '</div>' +
-        '<div class="small muted">' + (window.ACCOUNT_KIND_LABEL[a.kind] || '账户') + '</div></div><span class="muted">›</span></div>').join('') +
+        '<div class="small muted">' + F.escapeHtml(window.ACCOUNT_KIND_LABEL[a.kind] || '账户') + '</div></div><span class="muted" aria-hidden="true">›</span></button>').join('') +
       '</div>'
     )
     document.getElementById('stClose').addEventListener('click', U().closeSheet)

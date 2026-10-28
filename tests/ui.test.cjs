@@ -8,6 +8,44 @@ const root = path.resolve(__dirname, '..')
 const script = file => fs.readFileSync(path.join(root, file), 'utf8')
 const nextTurn = () => new Promise(resolve => setImmediate(resolve))
 
+test('amount field opens the keypad on keyboard focus and editor inputs have clear accessible names', async () => {
+  const dom = new JSDOM('<div id="sheet"></div><div id="mask"></div><div id="toast"></div>', {
+    url: 'https://ledger.test', runScripts: 'outside-only', pretendToBeVisual: true,
+  })
+  try {
+    const w = dom.window
+    Object.defineProperty(w, 'innerWidth', { value: 390, configurable: true })
+    w.eval(script('js/format.js'))
+    w.TXN_TYPE_LABEL = { income: '收入', expense: '支出', transfer: '转账' }
+    w.Lazy = { need: async () => null }
+    w.DB = { mode: 'guest', state: { categories: [] }, accounts: () => [], allAccounts: () => [],
+      category: () => null, rootCategories: () => [], childCategories: () => [], categoryName: () => '', accountName: () => '', budgetOf: () => null }
+    w.App = { state: { attachments: {} }, refresh: async () => {} }
+    w.eval(script('js/ui.js'))
+    await w.UI.openEditor(null)
+    const amount = w.document.querySelector('#amtInput')
+    assert.equal(w.document.querySelector('#keypadWrap').classList.contains('hidden'), true)
+    amount.focus()
+    assert.equal(w.document.querySelector('#keypadWrap').classList.contains('hidden'), false)
+    assert.equal(w.document.querySelector('label[for="noteInput"]').textContent, '备注')
+    assert.equal(w.document.querySelector('label[for="timeInput"]').textContent, '时间')
+    assert.equal(w.document.querySelector('label[for="tagInput"]').textContent, '标签（逗号分隔，可留空）')
+  } finally { dom.window.close() }
+})
+
+test('image viewer has a named close control', () => {
+  const dom = new JSDOM('<div id="lightboxRoot"></div>', { url: 'https://ledger.test', runScripts: 'outside-only' })
+  try {
+    const w = dom.window
+    w.eval(script('js/format.js'))
+    w.DB = {}
+    w.eval(script('js/ui.js'))
+    w.UI.lightbox('https://ledger.test/example.png')
+    assert.equal(w.document.querySelector('.lightbox button').getAttribute('aria-label'), '关闭凭证图片')
+    w.document.querySelector('.lightbox button').click()
+    assert.equal(w.document.querySelector('.lightbox'), null)
+  } finally { dom.window.close() }
+})
 test('manual transfer blocks different currencies before writing and accepts matching currencies', async () => {
   for (const [fromCurrency, targetCurrency, fromId, toId, accepted] of [
     ['CNY', 'USD', 1, 2, false],
@@ -76,3 +114,4 @@ test('today card counts only expenses and uses the selected base-currency symbol
     assert.equal(new Date(countRequest.to) - new Date(countRequest.from), 86400000)
   } finally { dom.window.close() }
 })
+

@@ -17,6 +17,8 @@ test('reconciliation stops when the balance changes while the form is open', asy
   w.confirm = () => true
   for (const file of ['js/format.js', 'js/wealth.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
   await w.Wealth.openReconcile(1)
+  assert.equal(w.document.querySelector('label[for="rcReal"]').textContent, '实际余额（USD）')
+  assert.equal(w.document.querySelector('#rcErr').getAttribute('role'), 'alert')
   assert.match(w.document.querySelector('#sheet').textContent, /USD/)
   w.document.querySelector('#rcReal').value = '120'
   balance = 11000

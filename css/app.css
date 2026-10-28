@@ -402,9 +402,10 @@ input, select, textarea { outline: none; }
 
 .lightbox { position: fixed; inset: 0; background: #000; z-index: 90; display: flex; align-items: center; justify-content: center; }
 .lightbox img { max-width: 100%; max-height: 100%; }
-.lightbox .close { position: absolute; top: 16px; right: 16px; width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,.2); color: #fff; font-size: var(--fs-section); display: grid; place-items: center; }
+.lightbox .close { position: absolute; top: 16px; right: 16px; width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.2); color: #fff; font-size: var(--fs-section); display: grid; place-items: center; }
 
 .list-item { display: flex; align-items: center; gap: 10px; padding: 13px 14px; border-bottom: 1px solid var(--line); transition: background .12s; }
+.statement-account { width: 100%; text-align: left; color: var(--text); }
 .list-item:active { background: #f6f8fc; }
 .list-item:last-child { border-bottom: none; }
 .list-item .ico { width: 34px; height: 34px; border-radius: var(--r-sm); display: grid; place-items: center; font-size: var(--fs-title); background: #f1f3f6; }
@@ -1055,3 +1056,4 @@ html[data-theme="dark"] .callout--ok p { color: #bfe3c9; }
 .me-adv > summary::before { content: '▸ '; }
 .me-adv[open] > summary::before { content: '▾ '; }
 .me-adv > .card { margin-top: 2px; }
+

@@ -137,7 +137,7 @@ window.UI = (function () {
   function lightbox(url) {
     const box = document.createElement('div')
     box.className = 'lightbox'
-    box.innerHTML = '<img src="' + url + '" alt="凭证"><button class="close">' + ic('close') + '</button>'
+    box.innerHTML = '<img src="' + esc(url) + '" alt="凭证"><button type="button" class="close" aria-label="关闭凭证图片">' + ic('close') + '</button>'
     box.addEventListener('click', () => box.remove())
     $('#lightboxRoot').appendChild(box)
   }
@@ -2634,15 +2634,15 @@ window.UI = (function () {
       '<button type="button" class="qt" id="voiceBtn" aria-label="语音记账">' + ic('mic') + '</button>' +
       '<button type="button" class="qt" id="edAiBtn" aria-label="AI 记账">' + ic('sparkles') + '</button></div>' +
       catBlock + accBlock +
-      '<div class="field"><label>备注</label><input id="noteInput" class="input" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"></div>' +
+      '<div class="field"><label for="noteInput">备注</label><input id="noteInput" class="input" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"></div>' +
       '<div class="chips scroll" id="noteSug" style="margin:-6px 0 10px"></div>' +
       '<button class="btn sm line block" id="moreToggle" style="margin:12px 0">' +
       (editorMoreOpen ? '收起更多选项 ⌃' : '更多选项：时间 · 标签 · 周期 · 报销 · 凭证图片 ⌄') + '</button>' +
       '<div id="moreBox"' + (editorMoreOpen ? '' : ' class="hidden"') + '>' +
-      '<div class="field"><label>时间</label>' +
+      '<div class="field"><label for="timeInput">时间</label>' +
       '<div class="row"><input id="timeInput" class="input grow" type="datetime-local" value="' + draft.occurred + '">' +
       '<button class="btn sm line" id="nowBtn" style="flex:none">此刻</button></div></div>' +
-      '<div class="field"><label>标签（逗号分隔，可留空）</label><input id="tagInput" class="input" placeholder="如：聚餐,AA" maxlength="40" value="' + esc(draft.tags) + '"></div>' +
+      '<div class="field"><label for="tagInput">标签（逗号分隔，可留空）</label><input id="tagInput" class="input" placeholder="如：聚餐,AA" maxlength="40" value="' + esc(draft.tags) + '"></div>' +
       extraBlock +
       imgBlock +
       '</div>' +
@@ -2878,6 +2878,7 @@ window.UI = (function () {
     /* 点金额区才展开键盘：默认收起，让「分类 / 账户 / 保存」都在首屏 */
     const amtBox = $('#amtBox')
     if (amtBox) amtBox.addEventListener('click', () => { if (!editorKpOpen) setKp(true) })
+    amtEl.addEventListener('focus', () => { if (window.innerWidth < 640 && !editorKpOpen) setKp(true) })
     if (kpWrap) setKp(!!editorKpOpen)
     if (kp) kp.addEventListener('click', e => {
       const btn = e.target.closest ? e.target.closest('button[data-k]') : null
