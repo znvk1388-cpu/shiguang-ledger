@@ -2,7 +2,7 @@
  * 端到端加密云备份（js/vault.js · window.Vault）
  * ------------------------------------------------------------
  * 这是什么、不是什么（很重要，UI 里也如实写清楚）：
- *   ✔ 是：把整本账（账本 / 账户 / 分类 / 账目 / 目标 / 预算）打包成 JSON，
+ *   ✔ 是：把账本快照（账本 / 账户 / 分类 / 账目 / 目标 / 预算）打包成 JSON，
  *        用你设的口令派生密钥加密（PBKDF2-SHA256 20 万轮 → AES-GCM-256），
  *        密文上传到 users/<uid>/ledger10/vault/ 这个「只有你自己能读」的路径。
  *        服务端、运维、云厂商拿到的都只是密文，没有口令解不开。
@@ -28,7 +28,6 @@ window.Vault = (function () {
     const h = String(hint || '').trim()
     return h.length > 0 && h === String(pass || '')
   }
-  const MAX_BACKUPS = 20
 
   /* ---------------- 基础工具 ---------------- */
   function readJson(key, fb) {
@@ -184,9 +183,6 @@ window.Vault = (function () {
     m.count = snap.transactions.length
     saveMeta(m)
 
-    /* 顺手清理超出上限的旧备份，避免占满空间 */
-    try { await prune(sess.user.id, MAX_BACKUPS) } catch (e) { /* 忽略 */ }
-
     return { ok: true, name: name, path: path, bytes: payload.length, count: snap.transactions.length }
   }
 
@@ -211,18 +207,6 @@ window.Vault = (function () {
     return { ok: true, list: list }
   }
 
-  async function prune(uid, keep) {
-    const st = storage()
-    if (!st) return
-    const res = await st.list(dirPath(uid), { limit: 200 })
-    if (!res || res.error || !res.data) return
-    const names = res.data.map(r => r.name || (r.path || '').split('/').pop())
-      .filter(n => /\.json$/i.test(n))
-      .sort((a, b) => String(b).localeCompare(String(a)))
-    const drop = names.slice(keep)
-    if (drop.length) await st.remove(drop.map(n => filePath(uid, n)))
-  }
-
   async function remove(name) {
     const sess = await session()
     if (!sess || !sess.user) return { error: '需要先登录' }
@@ -238,10 +222,8 @@ window.Vault = (function () {
   }
 
   /* ---------------- 导出到本机 / 从本机恢复 ----------------
-     与「加密备份到云端」的区别：这一路**完全不经过服务器，也不需要登录**，
-     打包 → 加密 → 直接生成文件下载到用户设备，用户可以自己丢进网盘或移动硬盘。
-     这是整套数据安全策略的最后一道保险：即使平台停止服务，文件仍在用户手里。
-     加密格式与云端备份完全一致（同一个 encryptSnapshot），两份备份可互相恢复。 */
+     文件在本机加密；游客使用完整账本备份，登录状态读取云端并导出有限快照。
+     完整游客备份只在游客模式确认替换后恢复；旧快照保留原有合并行为。 */
 
   /* 触发浏览器下载；返回是否成功发起 */
   function downloadBlob(text, filename) {
@@ -271,19 +253,33 @@ window.Vault = (function () {
     if (!cryptoOk()) return { error: '当前环境不支持加密（请用 https 打开）' }
     if (String(pass || '').length < MIN_PASS) return { error: '口令至少 ' + MIN_PASS + ' 位' }
     if (hintLeak(pass, o.hint)) return { error: '口令提示不能和口令一样（提示是明文保存的），请换一句不含口令的提示' }
-
-    const Share = await window.Lazy.need('share')
-    if (!Share || !Share.buildSnapshot) return { error: '数据导出模块未就绪，请稍后重试' }
+    const mode = window.DB.mode
+    const uid = window.DB.state && window.DB.state.uid
+    const sourceId = mode === 'guest' && window.GuestStore && window.GuestStore.state && window.GuestStore.state.sourceId
+    const sameTarget = () => window.DB.mode === mode && (window.DB.state && window.DB.state.uid) === uid &&
+      (mode !== 'guest' || (window.GuestStore && window.GuestStore.state && window.GuestStore.state.sourceId) === sourceId)
 
     if (U() && U().toast) U().toast('正在打包账目…')
     let snap
-    try { snap = await Share.buildSnapshot('本机加密备份', o.scope || 'all') }
+    try {
+      if (window.DB.mode === 'guest') {
+        const full = await window.GuestStore.backup()
+        snap = { kind: 'guest-full-v1', backup: full }
+      } else {
+        const Share = await window.Lazy.need('share')
+        if (!Share || !Share.buildSnapshot) return { error: '数据导出模块未就绪，请稍后重试' }
+        snap = await Share.buildSnapshot('本机加密备份', o.scope || 'all')
+      }
+    }
     catch (e) { return { error: '打包失败：' + ((e && e.message) || '') } }
-    if (!snap.transactions.length && !snap.accounts.length) return { error: '还没有可备份的数据，先记几笔' }
+    if (!sameTarget()) return { error: '打包期间账号或本机账本已切换，未生成备份，请重试' }
+    const data = snap.kind === 'guest-full-v1' ? snap.backup.data : snap
+    if (!data.transactions.length && !data.accounts.length) return { error: '还没有可备份的数据，先记几笔' }
 
     let payload
     try { payload = await encryptSnapshot(snap, pass, o.hint || '') }
     catch (e) { return { error: '加密失败：' + ((e && e.message) || '') } }
+    if (!sameTarget()) return { error: '加密期间账号或本机账本已切换，未生成备份，请重试' }
 
     const name = '拾光记账-加密备份-' + tsName(new Date()) + '.sgvault.json'
     if (!downloadBlob(payload, name)) return { error: '保存到本机失败（浏览器可能拦截了下载）' }
@@ -293,11 +289,11 @@ window.Vault = (function () {
     m.localAt = new Date().toISOString()
     m.localName = name
     m.localBytes = payload.length
-    m.localCount = snap.transactions.length
+    m.localCount = data.transactions.length
     m.localHint = o.hint != null ? String(o.hint).slice(0, 30) : (m.localHint || '')
     saveMeta(m)
 
-    return { ok: true, name: name, bytes: payload.length, count: snap.transactions.length }
+    return { ok: true, name: name, bytes: payload.length, count: data.transactions.length }
   }
 
   /**
@@ -319,6 +315,19 @@ window.Vault = (function () {
     let got
     try { got = await decryptSnapshot(text, pass) }
     catch (e) { return { error: '口令不对，或这份备份已损坏' } }
+
+    if (got.snap && got.snap.kind === 'guest-full-v1') {
+      if (!window.DB || window.DB.mode !== 'guest' || !window.GuestStore) return { error: '这份完整游客备份需要在游客模式恢复，请先切换游客模式' }
+      const sourceId = window.GuestStore.state.sourceId
+      if (!confirm('此完整游客备份会替换当前设备上的游客账本、图片和规则，不能合并。请先备份当前数据。确定继续？')) return { error: '已取消恢复，当前数据未改动' }
+      try {
+        const result = await window.GuestStore.restore(got.snap.backup, {
+          isActive: () => window.DB.mode === 'guest' && window.GuestStore.state.sourceId === sourceId,
+        })
+        if (window.DB.mode === 'guest' && window.DB.useGuest) await window.DB.useGuest()
+        return { ok: true, stats: { transactions: result.txns, accounts: got.snap.backup.data.accounts.length, failed: 0 }, at: got.at }
+      } catch (e) { return { error: '恢复失败：' + ((e && e.message) || '') } }
+    }
 
     const Share = await window.Lazy.need('share')
     if (!Share || !Share.mergeSnapshot) return { error: '合并模块未就绪，请稍后重试' }
@@ -389,7 +398,7 @@ window.Vault = (function () {
     } else if (d > 30) {
       v = ['warn', '' + ic('alert') + ' 已 ' + d + ' 天没备份了', '建议导出一份加密备份，存到网盘或电脑。', '立即导出']
     } else if (isGuest) {
-      v = ['ok', '' + ic('check') + ' 本机备份已完成', '上次备份' + (d === 0 ? '就在今天' : '在 ' + ago) + '。登录账号后还能跨设备同步。', '再导出一份']
+      v = ['ok', '' + ic('check') + ' 已发起本机备份', '上次发起导出' + (d === 0 ? '就在今天' : '在 ' + ago) + '，请确认文件已保存。', '再导出一份']
     } else {
       v = ['ok', '' + ic('check') + ' 数据已同步云端', '上次本机备份 ' + ago + '。', '再导出一份']
     }
@@ -444,7 +453,7 @@ window.Vault = (function () {
 
     const head = '<div class="sheet-head"><span class="sheet-title">加密备份到云端</span><button id="vtClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin:4px 0 10px">' +
-      '把整本账打包后用你的口令加密，密文存在只有你能读的云端路径。' +
+      '把账本快照用你的口令加密后保存到云端；此快照不含图片凭证、周期规则和模板。' +
       '<b>服务端拿到的只是密文</b>，没有口令解不开；口令不落盘、不上传，<b>忘了就恢复不了</b>。' +
       '注意：日常的云端同步仍是明文字段，这里是「备份层端到端加密」。' +
       '</div>' + banner
@@ -571,8 +580,8 @@ window.Vault = (function () {
       '<div class="sheet-head"><span class="sheet-title">导出加密文件到本机</span>' +
       '<button id="vlClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin:4px 0 10px">' +
-      '把整本账打包加密后保存成一个文件，你可以放进手机「文件」、电脑桌面，或上传到自己的网盘。' +
-      '<b>全程不经过服务器，也不需要登录</b>，口令只有你知道。' +
+      '游客备份包含账目、图片和周期规则，不含本机偏好设置；登录模式快照不含图片凭证、周期规则和模板。文件可保存到设备或自己的网盘。' +
+      '文件在本机加密生成；登录模式打包时需要读取云端数据，口令不会上传。' +
       '</div>' + banner
 
     const body =
@@ -582,7 +591,7 @@ window.Vault = (function () {
             '<div><div style="font-weight:600">上次本机备份</div>' +
             '<div class="small muted">' + esc(F.dstr(new Date(last.at))) +
             ' · ' + (last.count ? last.count + ' 笔' : '—') + ' · ' + kb(last.bytes) + '</div></div>' +
-            '<span class="chip on">' + ic('database') + ' 已导出</span>' +
+            '<span class="chip on">' + ic('database') + ' 已发起下载</span>' +
           '</div></div>'
         : '<div class="card"><div class="small muted">还没有导出过。建议每 1–3 个月导出一份，存到自己手里最踏实。</div></div>') +
 
@@ -603,7 +612,7 @@ window.Vault = (function () {
       '<div style="margin-top:16px"><div style="font-weight:600;margin-bottom:6px">恢复</div>' +
       '<div class="small muted" style="margin-bottom:8px">' +
       '选择之前导出的 <b>.sgvault.json</b> 文件，输入当时的口令即可还原。' +
-      '恢复是<b>合并</b>：已有的数据不会被清掉，重复的账目会自动跳过。' +
+      '旧版及登录模式快照按合并恢复；新版游客完整备份会替换本机游客数据，解密后会再次询问。' +
       '</div>' +
       '<input type="file" id="vlFile" accept=".json,.sgvault.json,application/json" style="display:none">' +
       '<button class="btn line block" id="vlPick">' + ic('folder') + ' 选择备份文件并恢复</button>' +
@@ -640,7 +649,7 @@ window.Vault = (function () {
       go.disabled = true
       const r = await exportLocal(p1, { hint: ($('#vlHint') || {}).value || '' })
       if (r.error) { renderLocal(r.error, 'err'); return }
-      renderLocal('已导出：' + r.count + ' 笔 · ' + kb(r.bytes) + '。请确认文件已保存，建议再传到网盘。', 'ok')
+      renderLocal('已发起下载：' + r.count + ' 笔 · ' + kb(r.bytes) + '。请确认文件已保存，建议再传到网盘。', 'ok')
     })
 
     /* 恢复：选文件 → 显示口令框 → 确认 */
@@ -663,7 +672,7 @@ window.Vault = (function () {
       if (!file0) { renderLocal('请先选择备份文件', 'err'); return }
       /* 恢复不校验长度：老备份可能是 6~7 位口令创建的，能解密就行 */
       if (!String(pass)) { renderLocal('请输入该备份的口令', 'err'); return }
-      if (!confirm('会把备份内容合并进当前数据（重复的自动跳过），确定继续？')) return
+      if (!confirm('将先解密并检查备份；游客完整备份在替换前会再次询问。确定继续？')) return
       restoreBtn.disabled = true
       let r
       try { r = await restoreLocal(file0, pass) }
@@ -782,4 +791,5 @@ window.Vault = (function () {
     openCenter, openLocalSheet, openSyncHub, replayOnboard, MIN_PASS, ITER,
   }
 })()
+
 

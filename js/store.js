@@ -567,7 +567,10 @@ window.Store = (function () {
   }
 
   /* ---------- 周期记账 ---------- */
-  async function listRecurring() {
+  async function listRecurring(options) {
+    if (options && options.ignoreBook) {
+      return fetchAllRows(() => db().from('recurring_rules').select('*').order('id', { ascending: true }))
+    }
     let q = db().from('recurring_rules').select('*').order('id', { ascending: true })
     if (state.bookId != null) q = q.eq('book_id', state.bookId)
     const res = await q
@@ -849,4 +852,5 @@ window.Store = (function () {
     hasOp, opTag, OP_TAG, cleanTags, fetchAllRows, PAGE, listAllAttachments, uploadFile,
   }
 })()
+
 

@@ -122,6 +122,12 @@ function categoryPath(state, id) {
   return { kind: c.kind, path: parent ? parent.name + '/' + c.name : c.name }
 }
 
+test('snapshot refuses to claim a complete backup when transactions are truncated', async () => {
+  const source = env(sourceData())
+  source.DB.listTransactions = async () => ({ rows: source.state.transactions.slice(0, 1), total: 4 })
+  await assert.rejects(source.Share.buildSnapshot('备份', 'all'), /不完整|过多/)
+})
+
 test('v2 backup round-trip preserves book, typed category, account currency, goals and budgets', async () => {
   const source = env(sourceData())
   const snap = await source.Share.buildSnapshot('备份', 'all')

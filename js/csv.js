@@ -545,10 +545,13 @@
     const savedAccounts = scopeIdentity ? (importAccountMaps()[scopeIdentity] || {}) : {}
     const accountRows = accountNames.map((name, i) => {
       const saved = Object.prototype.hasOwnProperty.call(savedAccounts, name) ? savedAccounts[name] : null
+      const missing = saved != null && !S().allAccounts().some(a => String(a.id) === String(saved))
       const options = S().allAccounts().map(a => '<option value="' + esc(String(a.id)) + '"' +
         (saved != null && String(saved) === String(a.id) ? ' selected' : '') + '>' + esc(a.name) + '</option>').join('')
       return '<label class="row small" style="gap:8px;margin-bottom:8px"><span class="grow">' + esc(name) +
-        '</span><select class="select" data-account-map="' + i + '"><option value="">按名称匹配或创建</option>' + options + '</select></label>'
+        '</span><select class="select" data-account-map="' + i + '">' +
+        (missing ? '<option value="__missing__" selected disabled>原映射账户已不存在，请重新选择</option>' : '') +
+        '<option value="">按名称匹配或创建</option>' + options + '</select></label>'
     }).join('')
     const preview = rows.slice(0, 20).map(r => {
       const color = r.type === 'income' ? 'var(--income)' : r.type === 'transfer' ? 'var(--transfer)' : 'var(--expense)'
@@ -611,14 +614,19 @@
     }
     const runButton = document.getElementById('impRun'), closeButton = document.getElementById('impClose'), errorBox = document.getElementById('impErr')
     let running = false
-    if (rows.length === dupCount) runButton.disabled = true
+    const updateRun = () => {
+      const missing = Array.from(document.querySelectorAll('#sheet [data-account-map]')).some(box => box.value === '__missing__')
+      runButton.disabled = rows.length === dupCount || missing
+      runButton.textContent = '确认导入 ' + (rows.length - dupCount) + ' 笔'
+    }
+    document.querySelectorAll('#sheet [data-account-map]').forEach(box => box.addEventListener('change', updateRun))
+    updateRun()
     document.querySelectorAll('#sheet [data-import-uncertain]').forEach(box => {
       box.addEventListener('change', () => {
         const row = rows[Number(box.getAttribute('data-import-uncertain'))]
         row.dup = !box.checked
         dupCount = rows.filter(r => r.dup).length
-        runButton.disabled = rows.length === dupCount
-        runButton.textContent = '确认导入 ' + (rows.length - dupCount) + ' 笔'
+        updateRun()
       })
     })
     closeButton.addEventListener('click', U().closeSheet)

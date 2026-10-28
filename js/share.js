@@ -183,7 +183,11 @@ window.Share = (function () {
     const o = opts || {}
     const onlyBook = scope === 'book' && S().state.bookId != null
     const bookId = S().state.bookId
-    const rows = (await S().listTransactions({ limit: 100000, ignoreBook: true })).rows || []
+    const result = await S().listTransactions({ limit: 100000, ignoreBook: true })
+    if (!result || !Array.isArray(result.rows) || (Number.isFinite(result.total) && result.total > result.rows.length)) {
+      throw new Error('账目读取不完整或数量过多，未生成快照')
+    }
+    const rows = result.rows
     const keep = onlyBook ? rows.filter(t => String(t.book_id) === String(bookId)) : rows
     /* 账户按账本投影：只发这个账本的流水真正用到的账户 */
     let accs = S().allAccounts()

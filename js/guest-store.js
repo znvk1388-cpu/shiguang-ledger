@@ -569,9 +569,9 @@ window.GuestStore = (function () {
   }
 
   /* ---------- 周期记账 ---------- */
-  async function listRecurring() {
+  async function listRecurring(options) {
     const all = await idb.all('recurring')
-    if (state.bookId == null) return all
+    if (state.bookId == null || (options && options.ignoreBook)) return all
     return all.filter(r => r.book_id === state.bookId)
   }
   async function addRecurring(rule) {
@@ -759,9 +759,10 @@ window.GuestStore = (function () {
     const dumpData = await dump()
     for (const a of dumpData.attachments) {
       if (a.blob) {
-        try { a.dataUrl = await blobToDataUrl(a.blob) } catch (e) { /* 跳过损坏图片 */ }
+        try { a.dataUrl = await blobToDataUrl(a.blob) } catch (e) { throw new Error('附件读取失败，未生成备份，请检查附件后重试') }
         delete a.blob
       }
+      if (typeof a.dataUrl !== 'string' || !/^data:[^,]*,/i.test(a.dataUrl)) throw new Error('附件无法读取，未生成备份，请检查附件后重试')
     }
     return { app: 'ledger10', version: 2, exportedAt: F.iso(new Date()), data: dumpData }
   }
@@ -821,7 +822,7 @@ window.GuestStore = (function () {
   /* JSON 恢复（P0 修复）：不再「先毁库再写回」。
      所有 store 的清空+写回放进同一个 IndexedDB 事务（idb.replaceAll），
      任一步失败整体回滚 —— 恢复前的本机数据原样保留，绝不出现半恢复状态。 */
-  async function restore(payload) {
+  async function restore(payload, options) {
     const data = validateBackup(payload)
     if (!data.sourceId) data.sourceId = await legacySourceId(payload.data == null ? payload : payload.data)
     /* dataUrl → Blob 必须在事务外完成（事务内不能 await） */
@@ -834,6 +835,7 @@ window.GuestStore = (function () {
       }
       atts.push(a)
     }
+    if (options && options.isActive && !options.isActive()) throw new Error('恢复期间账本已切换，原数据未改动')
     await idb.replaceAll({
       books: data.books,
       accounts: data.accounts,
@@ -870,4 +872,5 @@ window.GuestStore = (function () {
     dump, hasData, wipe, backup, restore,
   }
 })()
+
 

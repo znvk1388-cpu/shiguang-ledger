@@ -67,4 +67,10 @@ test('account mapping persists for the same identity and routes imported rows to
   w.DB.state.sourceId = 'library-b'
   await w.LedgerCsv.openImportPreview({ rows: makeRows(), report: {} }, '测试.csv')
   assert.equal(w.document.querySelector('[data-account-map]').value, '')
+  w.DB.state.sourceId = 'library-a'
+  accounts.length = 0
+  await w.LedgerCsv.openImportPreview({ rows: makeRows(), report: {} }, '测试.csv')
+  assert.match(w.document.querySelector('#sheet').textContent, /原映射账户已不存在/)
+  assert.equal(w.document.querySelector('#impRun').disabled, true)
+  assert.equal(writes.length, 1)
 })

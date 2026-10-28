@@ -435,7 +435,7 @@ window.UI = (function () {
         '<button class="btn grow" id="emptyAdd">＋ 记第一笔</button>' +
         '<button class="btn line grow" id="emptyBudget">设个预算</button>' +
         '</div>' +
-        '<button class="btn sm line block" id="emptyDemo" style="margin-top:8px">载入示例数据先看看</button>' +
+        '<button class="btn sm line block" id="emptyDemo" style="margin-top:8px">查看记账示例</button>' +
         '</div>'
     }
     return '<div class="empty"><div class="big">' + ic('receipt') + '</div><div>这段时间还没有记录</div>' +
@@ -1830,7 +1830,7 @@ window.UI = (function () {
       ]) +
       '<details class="me-adv"><summary>高级 · 演示与开发</summary>' +
       '<div class="card" style="padding:0">' +
-      it('demoBtn', '' + ic('zap') + '', '载入示例数据', '快速体验统计 / 预算 / 报表') +
+      it('demoBtn', '' + ic('zap') + '', '查看记账示例', '预览虚构数据，不修改账本') +
       it('seedBtn', '' + ic('sparkles') + '', '重置为推荐分类', '在现有分类之外补充一套') +
       '</div></details>' +
       (isGuest ? '' : '<button class="btn danger block" id="logoutBtn" style="margin-top:12px">退出登录</button>') +
@@ -2059,7 +2059,7 @@ window.UI = (function () {
       '<div class="sheet-head"><span class="sheet-title">JSON 备份 / 恢复</span><button id="bakClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin-bottom:12px">' +
       (isGuest ? '游客数据只存在本机，建议定期备份。备份文件含账目、图片、账本、预算、目标全部数据。'
-               : '此备份包含账目、账户、分类、账本、预算、周期规则和目标，不包含云端图片凭证。请另行保存重要凭证原图。') + '</div>' +
+               : '此备份包含账目、账户、分类、账本、预算、周期规则和目标，不包含云端图片、模板或回收站账目。请另行保存重要凭证原图。') + '</div>' +
       '<button class="btn block" id="bakExport">导出备份文件</button>' +
       '<div class="divider">恢复</div>' +
       '<input type="file" id="bakFile" accept=".json,application/json" class="hidden">' +
@@ -2074,13 +2074,17 @@ window.UI = (function () {
         if (isGuest) {
           payload = await window.GuestStore.backup()
         } else {
+          const txns = await S.listTransactions({ limit: 100000, ignoreBook: true })
+          if (!txns || !Array.isArray(txns.rows) || (Number.isFinite(txns.total) && txns.total > txns.rows.length)) {
+            throw new Error('账目读取不完整或数量过多，未生成备份')
+          }
           const dump = {
             accounts: S.allAccounts(),
             categories: S.state.categories,
-            transactions: (await S.listTransactions({ limit: 100000, ignoreBook: true })).rows,
+            transactions: txns.rows,
             attachments: [],
             budgets: S.state.budgets,
-            recurring: (await S.listRecurring()),
+            recurring: (await S.listRecurring({ ignoreBook: true })),
             books: S.books(),
             goals: S.state.goals,
           }

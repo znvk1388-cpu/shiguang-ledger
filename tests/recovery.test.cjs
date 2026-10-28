@@ -24,6 +24,14 @@ async function guest(indexedDB = new IDBFactory(), initialize = true) {
   if (initialize) await window.GuestStore.init();
   return window;
 }
+test('guest backup fails instead of silently omitting an unreadable attachment', async () => {
+  const w = await guest();
+  const all = w.Idb.all;
+  w.Idb.all = async name => name === 'attachments'
+    ? [{ id: 1, blob: { type: 'image/png', arrayBuffer: async () => { throw new Error('read failed') } } }]
+    : all(name);
+  await assert.rejects(w.GuestStore.backup(), /附件.*读取|读取.*附件/);
+});
 function backup() {
   return {
     app: 'ledger10', version: 2, data: {
@@ -226,3 +234,4 @@ test('encrypted restore retains selected file through redraw, wrong password and
   assert.equal(w.document.querySelector('#vlRestore').style.display, 'none', 'a new panel session releases the selected file');
   dom.window.close();
 });
+
