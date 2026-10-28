@@ -1,5 +1,5 @@
 /* AI 问账：用自然语言查询本机账目（懒加载模块，js/ask.js）
-   流程：本地只读聚合近 13 个月数据 → 护栏提示词（只准用给定数据回答）→
+   流程：本地只读聚合近 12 个月数据 → 护栏提示词（只准用给定数据回答）→
    Cloud.chat 流式输出 → 增量渲染。
    本模块不写任何账目；但提问时会把聚合快照（分类/账户名、备注摘要、余额）
    发送给 AI 服务用于生成回答 —— 界面上已明确披露这一点，不要在这里改口径。 */
@@ -30,7 +30,8 @@ window.Ask = (function () {
     '',
     '【数字规则】',
     '- 只使用 <ledger_data> 里出现的数字，或由它们加减乘除得到的值；不引入任何外部数据。',
-    '- 金额用「元」并保留两位小数；百分比保留整数；差额写清方向（多花 / 少花）。',
+    '- 金额保留两位小数并标明币种；百分比保留整数；差额写清方向（多花 / 少花）。',
+    '- monthly、top_expense_categories、budget 的金额已折算为 base_currency。recent.amount 与 accounts.balance 是原币，币种见各项 currency；需要跨币种比较或相加时，只用 base_amount / base_balance，禁止把不同原币金额直接相加。',
     '- 写下一个数字前先在数据里找到它；找不到就改用「没有相关记录」。',
     '',
     '【可以给判断，不可以给建议】',
@@ -66,14 +67,19 @@ window.Ask = (function () {
     '最近有什么大额支出？',
   ]
 
-  /* 只读聚合：近 13 个月逐月收支、本月/上月支出分类 Top、本月预算、
-     最近 8 笔明细、账户余额。金额一律先转「分」再换成元，避免浮点误差。 */
+  /* 只读聚合：近 12 个月逐月收支、本月/上月支出分类 Top、本月预算、
+     最近 8 笔明细、账户余额。跨账户汇总按已设置汇率折算基准币种，
+     单笔和余额保留原币及单位，不能让模型将不同原币直接相加。 */
   async function buildSnapshot(reference) {
     const now = reference || new Date()
     const thisMonth = F.monthKey(now)
-    const from = F.monthStart(now.getFullYear(), now.getMonth() - 11)
+    const from = new Date(now.getFullYear(), now.getMonth() - 11, 1)
     const to = F.monthEnd(now.getFullYear(), now.getMonth() + 1)
     const { rows } = await S.listTransactions({ from: F.iso(from), to: F.iso(to), limit: 100000 })
+    const currencies = {}
+    S.allAccounts().forEach(a => { currencies[a.id] = a.currency || 'CNY' })
+    const currencyOf = id => currencies[id] || 'CNY'
+    const toBase = t => F.toBase(F.toCents(t.amount), currencyOf(t.account_id))
 
     const byMonth = {}
     for (let i = 11; i >= 0; i--) {
@@ -85,7 +91,7 @@ window.Ask = (function () {
     list.forEach(t => {
       const key = F.monthOf(t.occurred_at)
       const slot = byMonth[key]
-      const cents = F.toCents(t.amount)
+      const cents = toBase(t)
       if (t.txn_type === 'income' || t.txn_type === 'expense') {
         if (slot) {
           slot[t.txn_type] += cents
@@ -115,10 +121,12 @@ window.Ask = (function () {
       .sort((a, b) => (String(a.occurred_at) < String(b.occurred_at) ? 1 : String(a.occurred_at) > String(b.occurred_at) ? -1 : (b.id || 0) - (a.id || 0)))
       .slice(0, 8)
       .map(t => ({
-        date: String(t.occurred_at || '').slice(0, 10),
+        date: F.isoDay(t.occurred_at),
         type: TYPE_NAME[t.txn_type] || t.txn_type,
         category: t.txn_type === 'transfer' ? '转账' : S.categoryName(t.category_id),
         amount: Number((F.toCents(t.amount) / 100).toFixed(2)),
+        currency: currencyOf(t.account_id),
+        base_amount: Number((toBase(t) / 100).toFixed(2)),
         note: typeof t.note === 'string' ? t.note.slice(0, 20) : '',
       }))
 
@@ -138,6 +146,8 @@ window.Ask = (function () {
       accounts = (bal || []).map(x => ({
         name: x.account && x.account.name ? String(x.account.name) : '未命名账户',
         balance: Number((Number(x.balance || 0) / 100).toFixed(2)),
+        currency: x.account && x.account.currency || 'CNY',
+        base_balance: Number((F.toBase(Number(x.balance || 0), x.account && x.account.currency || 'CNY') / 100).toFixed(2)),
       }))
     } catch (e) { accounts = [] }
 
@@ -151,6 +161,7 @@ window.Ask = (function () {
     return {
       today: F.dstr(now) + ' 周' + WEEK[now.getDay()],
       current_month: thisMonth,
+      base_currency: F.baseCurrency(),
       monthly: monthly,
       top_expense_categories: topCats,
       budget: budget,
@@ -225,8 +236,8 @@ window.Ask = (function () {
     ;(snapshot.monthly || []).forEach(m => { push(m.income); push(m.expense) })
     Object.values(snapshot.top_expense_categories || {}).forEach(arr => (arr || []).forEach(c => push(c.amount)))
     if (snapshot.budget) { push(snapshot.budget.budget); push(snapshot.budget.spent) }
-    ;(snapshot.recent || []).forEach(r => push(r.amount))
-    ;(snapshot.accounts || []).forEach(a => push(a.balance))
+    ;(snapshot.recent || []).forEach(r => { push(r.amount); push(r.base_amount) })
+    ;(snapshot.accounts || []).forEach(a => { push(a.balance); push(a.base_balance) })
     return set
   }
   function unverifiable(answer, snapshot) {
@@ -263,7 +274,7 @@ window.Ask = (function () {
     const generation = ++sheetGeneration
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">AI 问账</span><button id="askClose" class="btn sm line">关闭</button></div>' +
-      '<div class="small muted" style="margin-bottom:10px">用一句话问你的账目，例如「这个月吃饭花了多少」。可以继续追问，例如「那上个月呢」。<br><b>隐私说明：</b>提问时会把近 13 个月的汇总数据（分类与账户名、备注摘要、账户余额）发送给 AI 服务用于生成回答；不会上传完整账目和凭证图片。</div>' +
+      '<div class="small muted" style="margin-bottom:10px">用一句话问你的账目，例如「这个月吃饭花了多少」。可以继续追问，例如「那上个月呢」。<br><b>隐私说明：</b>提问时会把近 12 个月的收支汇总、本月和上月支出分类排行、当月预算、最近 8 笔账目的日期、分类、金额与备注前 20 字，以及账户名、币种和余额发送给 AI 服务；继续追问时还会发送当前窗口最近 3 轮问答。不会上传完整账目和凭证图片。</div>' +
       '<div class="chips" id="askChips" style="margin-bottom:10px">' +
       SUGGESTED.map(q => '<button class="chip" data-q="' + F.escapeHtml(q) + '">' + F.escapeHtml(q) + '</button>').join('') +
       '</div>' +
@@ -380,3 +391,4 @@ window.Ask = (function () {
     SUGGESTED: SUGGESTED.slice(),
   }
 })()
+

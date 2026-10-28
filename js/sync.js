@@ -73,10 +73,10 @@ window.Sync = (function () {
     try { return navigator.onLine !== false } catch (e) { return true }
   }
   function isNetworkError(e) {
-    /* 冲突是服务端明确答复的结果，不是网络问题。
+    /* 冲突和本地确定性校验失败都不是网络问题。
        必须放在最前面：某些环境下 navigator.onLine 会误报 false，
        若走到最后那行 `!online()` 就会把冲突当成网络失败塞进待上传队列。 */
-    if (e && e.code === 'CONFLICT') return false
+    if (e && ['CONFLICT', 'CROSS_CURRENCY_TRANSFER', 'TRANSFER_ACCOUNT_REQUIRED', 'REPLAY_CONTEXT_REQUIRED'].indexOf(e.code) >= 0) return false
     const m = String((e && (e.message || e.error_description || e.details || e)) || '')
     if (/Failed to fetch|NetworkError|network|fetch failed|ERR_|ECONN|timeout|timed out|aborted|offline/i.test(m)) return true
     return !online()
@@ -152,7 +152,8 @@ window.Sync = (function () {
     it.tries = (it.tries || 0) + 1
     it.lastTryAt = new Date().toISOString()
     /* 冲突不是「网络失败」—— 再重试一百次也不会成功，必须由人决定保留哪一版 */
-    it.state = (e && e.code === 'CONFLICT') ? 'conflict' : 'failed'
+    it.state = (e && e.code === 'CONFLICT') ? 'conflict'
+      : (e && e.code === 'REPLAY_CONTEXT_REQUIRED') ? 'review' : 'failed'
     it.msg = String((e && (e.message || e)) || '网络异常').slice(0, 160)
     saveOutbox(own, list)
   }
@@ -167,11 +168,42 @@ window.Sync = (function () {
     const a = args && args[0]
     if (!a || typeof a !== 'object') return
     const t = Array.isArray(a.tags) ? a.tags.slice() : []
+    let savedId = ''
     for (let i = 0; i < t.length; i++) {
-      if (typeof t[i] === 'string' && t[i].slice(0, OP_TAG.length) === OP_TAG) return   /* 已有标记，别叠加 */
+      if (typeof t[i] === 'string' && t[i].slice(0, OP_TAG.length) === OP_TAG) {
+        savedId = t[i].slice(OP_TAG.length)
+        break
+      }
     }
-    t.push(OP_TAG + opId)
-    a.tags = t
+    if (!savedId) t.push(OP_TAG + opId)
+    /* 不污染调用方的对象：编辑器还会用原 payload 创建周期规则，
+       那是另一次操作，不应继承首笔交易的操作 ID。 */
+    args[0] = Object.assign({}, a, { tags: t })
+    return savedId || opId
+  }
+
+  function freezeWriteContext(name, args, DB) {
+    if (DB.mode !== 'cloud') return
+    if (name === 'setBudget' && args[3] == null) args[3] = DB.currentBookId()
+    if (name === 'goalDeposit' && args[2] == null) {
+      const g = (DB.state.goals || []).find(x => x.id === args[0])
+      if (g) args[2] = Number(g.saved_amount)
+    }
+  }
+
+  function replayContextError(item) {
+    const a = item.args || []
+    let message = ''
+    if (item.method === 'setBudget' && a[3] == null) {
+      message = '这条旧预算没有记录原账本，无法安全重试。请回到原账本核对预算，必要时重新设置，再丢弃这条旧记录'
+    }
+    if (item.method === 'goalDeposit' && a[2] == null) {
+      message = '这条旧目标操作没有记录原余额，无法安全重试。请先刷新核对目标余额，必要时重新操作，再丢弃这条旧记录'
+    }
+    if (!message) return null
+    const e = new Error(message)
+    e.code = 'REPLAY_CONTEXT_REQUIRED'
+    return e
   }
 
   /* 这个操作是不是已经落库了。查不到就返回 false（交给用户判断）。 */
@@ -220,6 +252,11 @@ window.Sync = (function () {
     const DB = window.DB
     if (!DB || typeof DB[item.method] !== 'function') return { error: '当前版本不支持重试「' + (LABEL[item.method] || item.method) + '」' }
     if (DB.mode !== 'cloud') return { error: '当前不是登录模式，无法上传到云端' }
+    const contextError = replayContextError(item)
+    if (contextError) {
+      failItem(own, id, contextError)
+      return { error: contextError.message }
+    }
 
     if (CREATES[item.method]) {
       const dup = await alreadySaved(item)
@@ -240,7 +277,8 @@ window.Sync = (function () {
         return { ok: true, skipped: true, label: LABEL[item.method] || item.method }
       }
       if (e && e.code === 'CONFLICT') {
-        return { conflict: true, error: '这条在云端已被其他设备改过，重试不会生效，需要你选择保留哪一版' }
+        return { conflict: true, error: item.method === 'goalDeposit' ? e.message
+          : '这条在云端已被其他设备改过，重试不会生效，需要你选择保留哪一版' }
       }
       return { error: '重试仍然失败：' + ((e && e.message) || '网络异常') }
     } finally { retrying = false }
@@ -344,9 +382,10 @@ window.Sync = (function () {
       if (orig.__syncWrapped) return          /* 已经包过，别重复包（会套娃） */
       const wrapped = function () {
         const args = [].slice.call(arguments)
+        freezeWriteContext(name, args, DB)
         /* 先盖操作 ID，再发请求 —— 否则响应丢失时无从判定是否已写入 */
-        const opId = newId()
-        if (CREATES[name]) stampOp(name, args, opId)
+        let opId = newId()
+        if (CREATES[name]) opId = stampOp(name, args, opId) || opId
         let p
         try { p = orig.apply(DB, args) } catch (e) { p = Promise.reject(e) }
         if (!p || typeof p.then !== 'function') return p
@@ -361,8 +400,8 @@ window.Sync = (function () {
             if (DB.mode === 'cloud' && !retrying && isNetworkError(e)) {
               const it = enqueue(name, args, e, opId)
               const err = new Error(it
-                ? '网络异常，这一笔没能保存到云端。已放进「待上传」，联网后可在 我的 → 数据与同步 里重试'
-                : '网络异常，这一笔没能保存到云端，且本机待上传队列已满（上限 ' + OUT_MAX + ' 条），请先到 我的 → 数据与同步 处理')
+                ? '网络异常，暂未确认云端是否保存。已放进「待上传」，联网后可在 我的 → 数据与同步 里核对并重试'
+                : '网络异常，暂未确认云端是否保存，且本机待上传队列已满（上限 ' + OUT_MAX + ' 条），请先到 我的 → 数据与同步 处理')
               err.__queued = !!it
               err.cause = e
               throw err
@@ -531,3 +570,4 @@ window.Sync = (function () {
     legacyOutbox, legacyCount, dropLegacy, clearLegacy, adoptLegacy,
   }
 })()
+

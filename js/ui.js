@@ -2963,21 +2963,30 @@ window.UI = (function () {
 
     if (draft.type !== 'transfer' && !draft.categoryId) { edFail('请选择分类', 'catGrid'); return }
     if (!draft.accountId) { edFail('请选择账户', 'accChips'); return }
-    if (draft.type === 'transfer' && (!draft.toAccountId || draft.toAccountId === draft.accountId)) {
+    if (draft.type === 'transfer' && (!draft.toAccountId || String(draft.toAccountId) === String(draft.accountId))) {
       edFail('转账需要选择两个不同账户', 'toAccChips'); return
+    }
+    if (draft.type === 'transfer') {
+      const accounts = S.allAccounts()
+      const fromAccount = accounts.find(a => String(a.id) === String(draft.accountId))
+      const toAccount = accounts.find(a => String(a.id) === String(draft.toAccountId))
+      if (!fromAccount || !toAccount) { edFail('账户已不可用，请重新选择', 'accChips'); return }
+      if (String(fromAccount.currency || 'CNY').toUpperCase() !== String(toAccount.currency || 'CNY').toUpperCase()) {
+        edFail('暂不支持跨币种转账，请选择同币种账户', 'toAccChips'); return
+      }
     }
 
     /* AI 的已知币种必须跟随草稿到最终选定账户，避免人工选账户时丢失单位。 */
     if (draft.aiReview) {
-      const account = S.accounts().find(a => a.id === draft.accountId)
-      const toAccount = draft.type === 'transfer' ? S.accounts().find(a => a.id === draft.toAccountId) : null
+      const account = S.accounts().find(a => String(a.id) === String(draft.accountId))
+      const toAccount = draft.type === 'transfer' ? S.accounts().find(a => String(a.id) === String(draft.toAccountId)) : null
       if (!account || (draft.type === 'transfer' && !toAccount)) {
         $('#edErr').textContent = '账户已不可用，请重新选择'; return
       }
-      if (draft.aiCurrency && (account.currency || 'CNY') !== draft.aiCurrency) {
+      if (draft.aiCurrency && String(account.currency || 'CNY').toUpperCase() !== draft.aiCurrency) {
         $('#edErr').textContent = '识别金额币种为 ' + draft.aiCurrency + '，请选择同币种账户；如需换算，请退出后手动核对金额'; return
       }
-      if (toAccount && (account.currency || 'CNY') !== (toAccount.currency || 'CNY')) {
+      if (toAccount && String(account.currency || 'CNY').toUpperCase() !== String(toAccount.currency || 'CNY').toUpperCase()) {
         $('#edErr').textContent = '跨币种转账不能沿用同一个识别金额，请退出后手动核对两边金额'; return
       }
     }
@@ -3258,3 +3267,4 @@ window.UI = (function () {
 
 /* 各模块直接调 ic()，挂全局别名 */
 window.ic = window.UI.ic
+

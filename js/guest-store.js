@@ -3,9 +3,53 @@ window.GuestStore = (function () {
   const idb = window.Idb
   const F = window.Fmt
 
-  const state = { uid: 'guest', accounts: [], categories: [], budgets: [], books: [], goals: [], bookId: null, ready: false }
+  const state = { uid: 'guest', sourceId: '', accounts: [], categories: [], budgets: [], books: [], goals: [], bookId: null, ready: false }
 
   function unwrap(v) { return v }
+
+  function newSourceId() {
+    const c = window.crypto
+    if (c && c.randomUUID) return c.randomUUID()
+    if (c && c.getRandomValues) return Array.from(c.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('')
+    return 'guest-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
+  }
+  async function sourceId() {
+    let row = await idb.get('metadata', 'source')
+    if (!row) {
+      const value = newSourceId()
+      try { await idb.add('metadata', { id: 'source', value }); row = { value } }
+      catch (e) { row = await idb.get('metadata', 'source'); if (!row) throw e }
+    }
+    state.sourceId = row.value
+    return row.value
+  }
+
+  /* 旧 JSON 没有来源 UUID；同一份内容重复恢复必须得到相同来源，避免再次
+     迁移时把原来导入过的账目当成新账。时间戳属于导出信封，不属于数据身份。 */
+  async function legacySourceId(data) {
+    function stableJson(value) {
+      if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']'
+      if (value && typeof value === 'object') {
+        if (typeof Blob !== 'undefined' && value instanceof Blob) return JSON.stringify({ size: value.size, type: value.type })
+        return '{' + Object.keys(value).sort().filter(k => value[k] !== undefined).map(k => JSON.stringify(k) + ':' + stableJson(value[k])).join(',') + '}'
+      }
+      return JSON.stringify(value)
+    }
+    const content = { ...data }
+    delete content.exportedAt
+    delete content.sourceId
+    const text = stableJson(content)
+    if (window.crypto && window.crypto.subtle && typeof TextEncoder !== 'undefined') {
+      const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+      return 'legacy-' + Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('')
+    }
+    let a = 0x811c9dc5, b = 0x9e3779b9
+    for (let i = 0; i < text.length; i++) {
+      a = Math.imul(a ^ text.charCodeAt(i), 16777619)
+      b = Math.imul(b ^ text.charCodeAt(i), 2246822519)
+    }
+    return 'legacy-' + (a >>> 0).toString(16) + '-' + (b >>> 0).toString(16) + '-' + text.length
+  }
 
   /* ---------- 交易行内存缓存 ----------
      统计页一屏要跑 4~5 次聚合，每次都得 idb.getAll 一遍，3000 笔就是 15ms/次。
@@ -24,6 +68,7 @@ window.GuestStore = (function () {
 
   async function init() {
     state.uid = 'guest'
+    await sourceId()
     invalidateTxnCache()
     const [a, c, b, bk, g] = await Promise.all([
       idb.all('accounts'), idb.all('categories'), idb.all('budgets'), idb.all('books'), idb.all('goals'),
@@ -259,7 +304,24 @@ window.GuestStore = (function () {
 
   async function getTransaction(id) { return idb.get('transactions', id) }
 
+  function checkTransferCurrency(row) {
+    if (row.txn_type !== 'transfer') return
+    const from = row.account_id == null ? null : state.accounts.find(a => String(a.id) === String(row.account_id))
+    const to = row.to_account_id == null ? null : state.accounts.find(a => String(a.id) === String(row.to_account_id))
+    if (!from || !to) {
+      const error = new Error('请选择有效的转出和转入账户')
+      error.code = 'TRANSFER_ACCOUNT_REQUIRED'
+      throw error
+    }
+    if (String(from.currency || 'CNY').toUpperCase() !== String(to.currency || 'CNY').toUpperCase()) {
+      const error = new Error('暂不支持跨币种转账，请选择同币种账户')
+      error.code = 'CROSS_CURRENCY_TRANSFER'
+      throw error
+    }
+  }
+
   async function addTransaction(t) {
+    checkTransferCurrency(t)
     t.created_at = F.iso(new Date())
     t.updated_at = t.created_at
     t.reimbursable = !!t.reimbursable
@@ -273,6 +335,7 @@ window.GuestStore = (function () {
   async function updateTransaction(id, patch) {
     const t = await idb.get('transactions', id)
     if (!t) return null
+    checkTransferCurrency(Object.assign({}, t, patch))
     Object.assign(t, patch, { updated_at: F.iso(new Date()) })
     await idb.put('transactions', t)
     invalidateTxnCache()
@@ -512,6 +575,7 @@ window.GuestStore = (function () {
     return all.filter(r => r.book_id === state.bookId)
   }
   async function addRecurring(rule) {
+    checkTransferCurrency(rule)
     rule.created_at = F.iso(new Date())
     if (rule.book_id == null) rule.book_id = currentBookId()
     rule.id = await idb.add('recurring', rule)
@@ -519,7 +583,7 @@ window.GuestStore = (function () {
   }
   async function updateRecurring(id, patch) {
     const r = await idb.get('recurring', id)
-    if (r) { Object.assign(r, patch); await idb.put('recurring', r) }
+    if (r) { checkTransferCurrency(Object.assign({}, r, patch)); Object.assign(r, patch); await idb.put('recurring', r) }
     return r
   }
   async function deleteRecurring(id) { await idb.del('recurring', id) }
@@ -648,6 +712,7 @@ window.GuestStore = (function () {
 
   async function dump() {
     return {
+      sourceId: await sourceId(),
       accounts: await idb.all('accounts'),
       categories: await idb.all('categories'),
       transactions: await idb.all('transactions'),
@@ -675,7 +740,10 @@ window.GuestStore = (function () {
     invalidateAttCache()
     urlCache.forEach(url => { try { URL.revokeObjectURL(url) } catch (e) { /* 忽略 */ } })
     urlCache.clear()
-    return idb.destroy()
+    await idb.destroy()
+    state.sourceId = ''
+    state.ready = false
+    return true
   }
 
   /* JSON 备份：图片 Blob 转 dataUrl 内联，单文件可携带全部数据 */
@@ -698,17 +766,70 @@ window.GuestStore = (function () {
     return { app: 'ledger10', version: 2, exportedAt: F.iso(new Date()), data: dumpData }
   }
 
+  /* 旧备份没有账本/目标/模板等后加的表，可以省略；账户、分类和账目是
+     最小完整格式。先验证所有表，避免把别的 JSON 当备份清空本机数据。
+     不强制外键存在：旧版允许删除账户/分类，历史流水仍应能恢复。 */
+  function validateBackup(payload) {
+    const object = v => v != null && typeof v === 'object' && !Array.isArray(v)
+    if (!object(payload) || (payload.app != null && payload.app !== 'ledger10') ||
+      (payload.version != null && (!Number.isInteger(payload.version) || payload.version < 1 || payload.version > 2))) {
+      throw new Error('备份文件格式或版本不受支持')
+    }
+    const data = payload.data == null ? payload : payload.data
+    if (!object(data)) throw new Error('备份文件格式不正确')
+    const names = ['accounts', 'categories', 'transactions', 'attachments', 'budgets', 'recurring', 'books', 'goals', 'templates']
+    const validId = id => (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
+      (typeof id === 'string' && id.trim().length > 0)
+    const number = v => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(Number(v))
+    const date = v => typeof v === 'string' && v.trim() !== '' && Number.isFinite(Date.parse(v))
+    const out = {}
+    for (const name of names) {
+      const rows = data[name]
+      if ((!Array.isArray(rows) && rows != null) || (['accounts', 'categories', 'transactions'].indexOf(name) >= 0 && !Array.isArray(rows))) {
+        throw new Error('备份缺少有效的 ' + name + ' 数据表')
+      }
+      const ids = new Set()
+      out[name] = (rows || []).map((row, i) => {
+        const fail = () => { throw new Error('备份 ' + name + ' 第 ' + (i + 1) + ' 行格式不正确，原数据未改动') }
+        if (!object(row) || !validId(row.id) || ids.has(String(row.id))) fail()
+        ids.add(String(row.id))
+        for (const key of ['account_id', 'to_account_id', 'category_id', 'book_id', 'parent_id', 'transaction_id']) {
+          if (row[key] != null && !validId(row[key])) fail()
+        }
+        if (row.tags != null && (!Array.isArray(row.tags) || row.tags.some(t => typeof t !== 'string'))) fail()
+        if (row.note != null && typeof row.note !== 'string') fail()
+        if (['accounts', 'categories', 'books', 'goals', 'templates'].indexOf(name) >= 0 && (typeof row.name !== 'string' || !row.name.trim())) fail()
+        for (const key of ['amount', 'initial_balance', 'saved_amount', 'target_amount', 'size_bytes']) {
+          if (row[key] != null && !number(row[key])) fail()
+        }
+        if (['transactions', 'recurring', 'templates'].indexOf(name) >= 0 && !['income', 'expense', 'transfer'].includes(row.txn_type)) fail()
+        if (['transactions', 'recurring', 'budgets'].indexOf(name) >= 0 && (!number(row.amount) || Number(row.amount) < 0)) fail()
+        if (name === 'transactions' && !date(row.occurred_at)) fail()
+        if (name === 'categories' && !['income', 'expense'].includes(row.kind)) fail()
+        if (name === 'recurring' && (!date(row.start_date) || !['daily', 'weekly', 'monthly', 'yearly'].includes(row.freq) || (row.last_run_date != null && row.last_run_date !== '' && !date(row.last_run_date)))) fail()
+        if (name === 'budgets' && (typeof row.month_key !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(row.month_key))) fail()
+        if (name === 'goals' && (!number(row.target_amount) || Number(row.target_amount) < 0)) fail()
+        if (name === 'attachments' && !(typeof row.dataUrl === 'string' && /^data:[^,]*,/i.test(row.dataUrl)) && !(row.blob && typeof row.blob.arrayBuffer === 'function')) fail()
+        return { ...row }
+      })
+    }
+    if (data.sourceId != null && (typeof data.sourceId !== 'string' || !data.sourceId.trim() || data.sourceId.length > 160)) throw new Error('备份来源标识不正确')
+    out.sourceId = data.sourceId || ''
+    return out
+  }
+
   /* JSON 恢复（P0 修复）：不再「先毁库再写回」。
      所有 store 的清空+写回放进同一个 IndexedDB 事务（idb.replaceAll），
      任一步失败整体回滚 —— 恢复前的本机数据原样保留，绝不出现半恢复状态。 */
   async function restore(payload) {
-    const data = payload && payload.data ? payload.data : payload
-    if (!data || !Array.isArray(data.transactions)) throw new Error('备份文件格式不正确')
+    const data = validateBackup(payload)
+    if (!data.sourceId) data.sourceId = await legacySourceId(payload.data == null ? payload : payload.data)
     /* dataUrl → Blob 必须在事务外完成（事务内不能 await） */
     const atts = []
     for (const a of (data.attachments || [])) {
       if (a.dataUrl) {
-        try { a.blob = await (await fetch(a.dataUrl)).blob() } catch (e) { a.blob = null }
+        try { a.blob = await (await fetch(a.dataUrl)).blob() }
+        catch (e) { throw new Error('备份附件无法读取，原数据未改动') }
         delete a.dataUrl
       }
       atts.push(a)
@@ -723,6 +844,7 @@ window.GuestStore = (function () {
       templates: data.templates,
       transactions: data.transactions,
       attachments: atts,
+      metadata: [{ id: 'source', value: data.sourceId }],
     })
     invalidateTxnCache()
     invalidateAttCache()
@@ -733,7 +855,7 @@ window.GuestStore = (function () {
   }
 
   return {
-    state, init, seedPresets,
+    state, init, seedPresets, sourceId,
     accounts, allAccounts, accountName, categoryName, category, rootCategories, childCategories, listAllAttachments, uploadFile,
     addAccount, updateAccount, deleteAccount, addCategory, deleteCategory,
     listTransactions, getTransaction, addTransaction, updateTransaction, deleteTransaction,
@@ -748,3 +870,4 @@ window.GuestStore = (function () {
     dump, hasData, wipe, backup, restore,
   }
 })()
+

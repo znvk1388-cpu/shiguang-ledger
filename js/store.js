@@ -156,11 +156,9 @@ window.Store = (function () {
     await loadGoals()
   }
   /* 存入/取出：delta 为元，可正可负。
-     幂等（P1 修复）：旧实现「读缓存 → 加 delta → 写回」，断网响应丢失后的重试会
-     基于过期缓存再算一次，saved_amount 翻倍。现在调用方把「调用时刻的余额快照」
-     一起传进来（baseSaved），写绝对值 next = base + delta，并带 .eq('saved_amount', base)
-     条件更新：值仍是 base 才写；0 行受影响时回查——已是 next 判定「本次已生效」
-     （重试场景），是别的值说明被其他设备改过，抛 CONFLICT 由用户裁决。 */
+     用调用时的余额快照做条件更新。金额相同并不能证明是同一操作：两台设备
+     可能恰好各存入相同金额，因此 0 行受影响时一律要求核对，不能误报成功。
+     服务端暂没有操作 ID 去重能力，响应丢失后也保守提示「可能已生效」。 */
   async function goalDeposit(id, delta, baseSaved) {
     const g = state.goals.find(x => x.id === id)
     if (!g) throw new Error('目标不存在')
@@ -170,10 +168,7 @@ window.Store = (function () {
     const res = await db().from('savings_goals').update(patch).eq('id', id).eq('saved_amount', base).select()
     if (res.error) throw res.error
     if (res.data && res.data.length) { await loadGoals(); return next }
-    const cur = await db().from('savings_goals').select('saved_amount').eq('id', id).maybeSingle()
-    const row = cur && cur.data
-    if (row && Number(row.saved_amount) === next) { await loadGoals(); return next }
-    const e = new Error('这个目标刚被其他设备修改过，请刷新后再试')
+    const e = new Error('目标余额已变化，本次操作可能已经生效。请先刷新核对余额，再决定是否重新操作')
     e.code = 'CONFLICT'
     throw e
   }
@@ -376,7 +371,27 @@ window.Store = (function () {
     return res.data
   }
 
+  /* 交易只有一个 amount，无法同时表达不同币种的转出、转入金额。
+     所有写入入口共用此校验，导入和模板等路径也不能绕过。 */
+  function assertTransferCurrency(t) {
+    if (!t || t.txn_type !== 'transfer') return
+    const account = id => id == null ? null : state.accounts.find(a => a.id != null && String(a.id) === String(id))
+    const from = account(t.account_id)
+    const to = account(t.to_account_id)
+    if (!from || !to) {
+      const e = new Error('转账账户不存在，请刷新后重新选择账户')
+      e.code = 'TRANSFER_ACCOUNT_REQUIRED'
+      throw e
+    }
+    if (String(from.currency || 'CNY').toUpperCase() !== String(to.currency || 'CNY').toUpperCase()) {
+      const e = new Error('暂不支持跨币种转账，请选择同币种账户')
+      e.code = 'CROSS_CURRENCY_TRANSFER'
+      throw e
+    }
+  }
+
   async function addTransaction(t) {
+    assertTransferCurrency(t)
     if (t.book_id == null) t.book_id = currentBookId()
     const rows = unwrap(await db().from('transactions').insert(t).select())
     return rows[0]
@@ -389,6 +404,14 @@ window.Store = (function () {
        · 记录还在、只是版本变了 → 冲突（CONFLICT），让用户选怎么处理
        · 记录压根不在 / 不属于我 → RLS_NO_ROWS（沿用 mustAffect 的提示） */
   async function updateTransaction(id, patch, expectUpdatedAt) {
+    /* 局部 patch 也必须校验完整交易，不能只改一个账户来绕过币种约束。 */
+    if (patch.txn_type == null || (patch.txn_type === 'transfer' &&
+        (patch.account_id == null || patch.to_account_id == null))) {
+      const current = await getTransaction(id)
+      if (current) assertTransferCurrency(Object.assign({}, current, patch))
+    } else {
+      assertTransferCurrency(patch)
+    }
     let q = db().from('transactions').update(patch).eq('id', id)
     if (expectUpdatedAt) q = q.eq('updated_at', expectUpdatedAt)
     const rows = unwrap(await q.select())
@@ -552,6 +575,7 @@ window.Store = (function () {
     return res.data || []
   }
   async function addRecurring(rule) {
+    assertTransferCurrency(rule)
     if (rule.book_id == null) rule.book_id = currentBookId()
     const rows = unwrap(await db().from('recurring_rules').insert(rule).select())
     return rows[0]
@@ -588,8 +612,9 @@ window.Store = (function () {
     return out
   }
 
-  /* 周期补记的防重标记（与游客侧同款）：`_op:rec:<规则id>:<日期>`。
-     两台设备同时补记、或响应丢失后重试，同一天永远只落一条。 */
+  /* 周期补记标记（与游客侧同款）：`_op:rec:<规则id>:<日期>`。
+     用于识别已经完成的补记和中断后的重跑；前端先查后写不能保证跨设备并发唯一，
+     那需要服务端唯一约束或事务支持。 */
   function recOpTag(ruleId, day) { return OP_TAG + 'rec:' + ruleId + ':' + day }
 
   /* 打开应用时把到期的周期账目补记出来，每轮最多 24 条防误刷 */
@@ -598,6 +623,7 @@ window.Store = (function () {
     const today = window.Fmt.dstr(nowDate || new Date())
     let generated = 0
     for (const r of rules) {
+      assertTransferCurrency(r)
       const startDay = String(r.start_date).slice(0, 10)
       let cursor = window.Fmt.nextDue(r.last_run_date, startDay, r.freq)
       let guard = 0
@@ -608,14 +634,14 @@ window.Store = (function () {
           d.setHours(12, 0, 0, 0)
           /* auto 标记写在 tags 里（不改表结构），明细里显示「自动」并可批量撤销；
              `_op:rec:…` 是防重标记，读回时 cleanTags 会摘掉 */
-          const tags = (Array.isArray(r.tags) ? r.tags.slice() : [])
+          /* 规则创建的操作 ID 不是本期账目的身份，不能继承。
+             交易单号同样只属于原始账目，不应复制到后续每一期。 */
+          const tags = (Array.isArray(r.tags) ? r.tags : []).filter(t =>
+            typeof t !== 'string' || (t.slice(0, OP_TAG.length) !== OP_TAG && t.slice(0, ORD_TAG.length) !== ORD_TAG))
           if (tags.indexOf('auto') < 0) tags.push('auto')
-          if (!tags.some(t => typeof t === 'string' && t.slice(0, OP_TAG.length) === OP_TAG)) {
-            tags.push(recOpTag(r.id, cursor))
-          }
+          tags.push(recOpTag(r.id, cursor))
           /* 幂等查重：另一台设备可能已经把这一天补过了 */
-          let dup = false
-          try { dup = await hasOp('transactions', 'rec:' + r.id + ':' + cursor) } catch (e) { /* 查重失败不拦写 */ }
+          const dup = await hasOp('transactions', 'rec:' + r.id + ':' + cursor)
           if (!dup) {
             inserts.push({
               txn_type: r.txn_type, amount: Number(r.amount), occurred_at: window.Fmt.iso(d),
@@ -704,8 +730,9 @@ window.Store = (function () {
     /* 全部账本视图下合并各账本同月预算 */
     return list.reduce((s, b) => s + Number(b.amount), 0)
   }
-  async function setBudget(monthKey, categoryId, amount) {
-    const bookId = currentBookId()
+  async function setBudget(monthKey, categoryId, amount, explicitBookId) {
+    /* 第四参数由待上传队列冻结，重试时不能跟着当前选中的账本变化。 */
+    const bookId = explicitBookId != null ? explicitBookId : currentBookId()
     const existing = state.budgets.find(x =>
       x.month_key === monthKey && (x.category_id || 0) === (categoryId || 0) &&
       (x.book_id || 0) === (bookId || 0))
@@ -773,7 +800,7 @@ window.Store = (function () {
   async function netWorthSeries(months) {
     const n = months || 12
     const rows = await fetchAllRows(() =>
-      db().from('transactions').select('txn_type, amount, occurred_at, account_id'))
+      db().from('transactions').select('txn_type, amount, occurred_at, account_id').is('deleted_at', null))
     const now = new Date()
     const points = []
     const map = curMap()
@@ -822,3 +849,4 @@ window.Store = (function () {
     hasOp, opTag, OP_TAG, cleanTags, fetchAllRows, PAGE, listAllAttachments, uploadFile,
   }
 })()
+

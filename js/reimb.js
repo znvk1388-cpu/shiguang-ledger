@@ -96,7 +96,7 @@
     const done = x.status === 'done'
     return '<div class="reimb-row' + (done ? ' done' : '') + '" data-rid="' + t.id + '">' +
       '<div class="reimb-main">' +
-      '<div class="reimb-line1"><b class="num">¥' + F.yuan(t.amount) + '</b>' +
+      '<div class="reimb-line1"><b class="num">¥' + F.yuan(F.toCents(t.amount)) + '</b>' +
       '<span class="reimb-tag ' + x.status + '">' + (STATUS_LABEL[x.status] || '待报销') + '</span></div>' +
       '<div class="reimb-line2 small muted">' + F.humanDay(t.occurred_at) + ' · ' +
       F.escapeHtml((cat && cat.name) || '未分类') + (acc ? ' · ' + F.escapeHtml(acc) : '') +
@@ -143,11 +143,15 @@
         const max = item ? F.yuan(F.toCents(item.t.amount)) : ''
         const v = prompt('这次收到多少（元）？剩余部分仍显示为待报销。\n本笔金额：¥' + max, '')
         if (v == null) return
-        const yuan = Number(String(v).replace(/[^\d.]/g, ''))
-        if (!(yuan > 0)) { window.UI.toast('请输入大于 0 的金额'); return }
+        const yuan = Number(String(v).trim())
         const cents = F.toCents(yuan)
+        if (!Number.isSafeInteger(cents) || cents <= 0) { window.UI.toast('请输入有效且大于 0 的金额'); return }
         const total = item ? F.toCents(item.t.amount) : 0
-        set(id, { status: cents >= total ? 'done' : 'partial', received: cents })
+        if (!(total > 0)) return
+        /* 输入的是本次到账金额，覆盖层保存累计已收；再次打开面板也不能丢掉前次回款。 */
+        const previous = Math.max(0, Number((get(id) || {}).received) || 0)
+        const received = Math.min(total, previous + cents)
+        set(id, { status: received >= total ? 'done' : 'partial', received })
         reopen()
       }
     })
@@ -172,3 +176,4 @@
     get, set, clear, statusOf, outstandingCents, ageDays, list, summary, openPanel, chipsHtml, STATUS_LABEL,
   }
 })()
+

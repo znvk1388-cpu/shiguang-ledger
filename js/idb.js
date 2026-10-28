@@ -1,14 +1,15 @@
 /* 极简 IndexedDB 封装：游客模式的本地数据层 */
 window.Idb = (function () {
   const DB_NAME = 'ledger10-guest'
-  const VERSION = 3
-  const STORES = ['accounts', 'categories', 'transactions', 'attachments', 'budgets', 'recurring', 'books', 'goals', 'templates']
+  const VERSION = 4
+  const STORES = ['accounts', 'categories', 'transactions', 'attachments', 'budgets', 'recurring', 'books', 'goals', 'templates', 'metadata']
   let dbPromise = null
 
   function open() {
     if (dbPromise) return dbPromise
-    dbPromise = new Promise((resolve, reject) => {
+    const pending = new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, VERSION)
+      let cancelled = false
       req.onupgradeneeded = () => {
         const db = req.result
         STORES.forEach(name => {
@@ -17,10 +18,28 @@ window.Idb = (function () {
           }
         })
       }
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
+      req.onsuccess = () => {
+        const db = req.result
+        /* blocked 已报错后请求仍可能完成；关闭迟到连接，避免它继续挡住升级。 */
+        if (cancelled) { db.close(); return }
+        db.onversionchange = () => {
+          db.close()
+          if (dbPromise === pending) dbPromise = null
+        }
+        resolve(db)
+      }
+      req.onblocked = () => {
+        cancelled = true
+        if (dbPromise === pending) dbPromise = null
+        reject(new Error('本机数据库升级被其他标签页阻止，请关闭本应用的其他标签页后重试'))
+      }
+      req.onerror = () => {
+        if (dbPromise === pending) dbPromise = null
+        reject(req.error)
+      }
     })
-    return dbPromise
+    dbPromise = pending
+    return pending
   }
 
   function tx(db, store, mode) {
@@ -73,19 +92,27 @@ window.Idb = (function () {
      本机全部数据不可逆丢失。这里把所有 store 的 clear+put 放进同一个事务：
      任一 store 写失败整体回滚，恢复前的数据原样保留。 */
   function replaceAll(map) {
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return Promise.reject(new Error('备份数据格式不正确'))
+    const stores = Object.keys(map)
+    if (stores.some(s => STORES.indexOf(s) < 0 || !Array.isArray(map[s]))) return Promise.reject(new Error('备份数据表格式不正确'))
     return open().then(db => new Promise((resolve, reject) => {
-      const stores = Object.keys(map)
       if (!stores.length) { resolve(true); return }
       const transaction = db.transaction(stores, 'readwrite')
-      stores.forEach(s => {
-        const os = transaction.objectStore(s)
-        os.clear()
-        const rows = map[s] || []
-        for (let i = 0; i < rows.length; i++) os.put(rows[i])
-      })
+      let writeError = null
       transaction.oncomplete = () => resolve(true)
-      transaction.onabort = () => reject(transaction.error || new Error('本机存储未提交，原数据未受影响，请重试或改用导出文件恢复'))
-      transaction.onerror = () => reject(transaction.error || new Error('本机存储失败，原数据未受影响'))
+      transaction.onabort = () => reject(writeError || transaction.error || new Error('本机存储未提交，原数据未受影响，请重试或改用导出文件恢复'))
+      /* DataError / DataCloneError 会同步抛出，不会自动中止已经排队的 clear。
+         只有显式 abort 才能保证所有表仍是恢复前的内容。 */
+      try {
+        stores.forEach(s => {
+          const os = transaction.objectStore(s)
+          os.clear()
+          for (const row of map[s]) os.put(row)
+        })
+      } catch (e) {
+        writeError = e
+        transaction.abort()
+      }
     }))
   }
 
@@ -115,3 +142,4 @@ window.Idb = (function () {
 
   return { all, count, get, put, add, del, clear, replaceAll, destroy, STORES }
 })()
+

@@ -11,7 +11,8 @@
      加密后放到 shared/<ownerUid>/ledger10/<sid>.json；
    - 家人凭共享码下载、解密、按「账本 + 分类 + 账户」名称对齐后合并进自己
      的账目（按指纹去重，可反复刷新）。
-   因为是加密的，即使别人能列出 shared 目录，也只能看到密文。
+   SG1 的文件名包含密钥派生所需的 sid；共享目录的列举/读取权限仍需服务端验证。
+   后续协议应将对象标识与仅随共享码传递的随机 secret 分离。
    只有登录用户能用；游客模式给出「需先登录」提示。
    --------------------------------------------------------------- */
 window.Share = (function () {
@@ -120,7 +121,17 @@ window.Share = (function () {
   function categoryPath(id) {
     const c = S().category(id)
     if (!c) return ''
-    return c.parent_id ? (S().categoryName(c.parent_id) + '/' + c.name) : c.name
+    const parts = [c.name]
+    const seen = new Set([String(c.id)])
+    let parentId = c.parent_id
+    while (parentId != null && !seen.has(String(parentId))) {
+      seen.add(String(parentId))
+      const parent = S().category(parentId)
+      if (!parent) break
+      parts.unshift(parent.name)
+      parentId = parent.parent_id
+    }
+    return parts.join('/')
   }
   /* 共享前预览：按当前选项算出「到底会发出去什么」，让用户在点上传前看清清单 */
   async function previewCounts(scope, opts) {
@@ -135,13 +146,18 @@ window.Share = (function () {
       if (t.to_account_id != null) used[String(t.to_account_id)] = 1
     })
     const all = S().allAccounts()
+    const allGoals = S().state.goals || S().listGoals()
     const goals = onlyBook
-      ? S().listGoals().filter(g => String(g.book_id || '') === String(bookId))
-      : S().listGoals()
+      ? allGoals.filter(g => String(g.book_id || '') === String(bookId))
+      : allGoals
     let budgets = S().state.budgets || []
     if (onlyBook) {
       if (!o.includeBudgets) budgets = []
-      else budgets = budgets.filter(b => b.category_id == null || used[String(b.category_id)])
+      else {
+        const usedCat = new Set(keep.map(t => String(t.category_id)))
+        budgets = budgets.filter(b => String(b.book_id || S().defaultBookId()) === String(bookId) &&
+          (b.category_id == null || usedCat.has(String(b.category_id))))
+      }
     }
     return {
       transactions: keep.length,
@@ -177,52 +193,67 @@ window.Share = (function () {
       ? S().books().filter(b => String(b.id) === String(bookId))
       : S().books()
     /* 目标按账本归属过滤 */
+    const allGoals = S().state.goals || S().listGoals()
     const goals = onlyBook
-      ? S().listGoals().filter(g => String(g.book_id || '') === String(bookId))
-      : S().listGoals()
-    /* 预算没有 book_id：只发用户勾选的，且分类预算限本月历里出现过的分类 */
+      ? allGoals.filter(g => String(g.book_id || '') === String(bookId))
+      : allGoals
+    /* 预算按原账本投影，分类预算限当前流水出现过的分类。 */
     let budgets = (S().state.budgets || [])
     if (onlyBook) {
       if (!o.includeBudgets) budgets = []
       else {
         const usedCat = {}
         keep.forEach(t => { if (t.category_id != null) usedCat[String(t.category_id)] = 1 })
-        budgets = budgets.filter(b => b.category_id == null || usedCat[String(b.category_id)])
+        budgets = budgets.filter(b => String(b.book_id || S().defaultBookId()) === String(bookId) &&
+          (b.category_id == null || usedCat[String(b.category_id)]))
       }
     }
+    const sourceId = S().mode === 'cloud' && S().state.uid
+      ? 'cloud:' + S().state.uid
+      : 'guest:' + (S().state.sourceId || (window.GuestStore && window.GuestStore.sourceId ? await window.GuestStore.sourceId() : 'legacy'))
     return {
-      v: 1,
+      v: 2,
+      sourceId: sourceId,
       at: new Date().toISOString(),
       label: label || '共享账本',
       scope: scope || 'all',
       /* 给解密方一个明示：这份快照含不含余额，别让「0 元」被误读成真没钱 */
       balances: withBal,
-      books: books.map(b => ({ name: b.name, icon: b.icon || '📒' })),
+      books: books.map(b => ({ id: b.id, name: b.name, icon: b.icon || '📒' })),
       accounts: accs.map(a => ({
+        id: a.id,
         name: a.name, kind: a.kind, icon: a.icon || '💰', color: a.color || '#2f6bff',
         currency: a.currency || 'CNY', initial_balance: withBal ? (Number(a.initial_balance) || 0) : 0,
       })),
       categories: (S().state.categories || []).map(c => ({
+        id: c.id, parent_id: c.parent_id || null,
         kind: c.kind, name: c.name, icon: c.icon || '', color: c.color || '',
         parent: c.parent_id ? S().categoryName(c.parent_id) : null,
       })),
       transactions: keep.map(t => ({
+        id: t.id, book_id: t.book_id || S().defaultBookId(),
+        account_id: t.account_id, to_account_id: t.to_account_id || null, category_id: t.category_id || null,
         date: F.isoLocal(t.occurred_at).slice(0, 16),
         type: t.txn_type,
         amount: Number(t.amount) || 0,
         book: t.book_id ? S().bookName(t.book_id) : '',
         account: t.account_id ? S().accountName(t.account_id) : '',
+        currency: (accs.find(a => String(a.id) === String(t.account_id)) || {}).currency || 'CNY',
         toAccount: t.to_account_id ? S().accountName(t.to_account_id) : '',
+        toCurrency: t.to_account_id ? ((accs.find(a => String(a.id) === String(t.to_account_id)) || {}).currency || 'CNY') : null,
         category: categoryPath(t.category_id),
         note: t.note || '',
         tags: (t.tags || []).slice(0, 8),
         reimbursable: !!t.reimbursable,
       })),
       goals: goals.map(g => ({
+        id: g.id, book_id: g.book_id || S().defaultBookId(), book: S().bookName(g.book_id || S().defaultBookId()),
         name: g.name, icon: g.icon || '🎯', target_amount: Number(g.target_amount) || 0,
         saved_amount: Number(g.saved_amount) || 0, deadline: g.deadline || null, done: !!g.done,
       })),
       budgets: budgets.map(b => ({
+        book_id: b.book_id || S().defaultBookId(), book: S().bookName(b.book_id || S().defaultBookId()),
+        category_id: b.category_id || null, category_kind: b.category_id ? (S().category(b.category_id) || {}).kind : null,
         month_key: b.month_key,
         category: b.category_id ? categoryPath(b.category_id) : '',
         amount: Number(b.amount) || 0,
@@ -316,26 +347,43 @@ window.Share = (function () {
   }
 
   /* ---------------- 合并 ---------------- */
-  function fpOf(t) {
-    return [t.date, t.type, t.amount, t.account, t.toAccount, t.category, t.note].join('|')
+  /* 去重按目标账号隔离；新快照使用来源库 + 来源交易 ID，不把同内容的两笔吞掉。 */
+  async function digestId(value) {
+    if (window.crypto && window.crypto.subtle && typeof TextEncoder !== 'undefined') {
+      const bytes = new Uint8Array(await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+      return Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('')
+    }
+    /* 非安全上下文只用于兼容已有明文快照；保留完整身份，避免弱哈希碰撞。 */
+    return encodeURIComponent(value)
   }
-  function seenSet() {
-    const arr = readJson(SEEN_KEY, [])
+  function targetIdentity() {
+    return S().mode === 'cloud' ? 'cloud:' + S().state.uid : 'guest:' + (S().state.sourceId || 'legacy')
+  }
+  function seenSet(target) {
+    const arr = readJson(SEEN_KEY + ':v2:' + encodeURIComponent(target || targetIdentity()), [])
     return new Set(Array.isArray(arr) ? arr : [])
   }
-  function saveSeen(set) {
+  function saveSeen(set, target) {
     const arr = Array.from(set)
-    writeJson(SEEN_KEY, arr.slice(Math.max(0, arr.length - SEEN_MAX)))
+    writeJson(SEEN_KEY + ':v2:' + encodeURIComponent(target || targetIdentity()), arr.slice(Math.max(0, arr.length - SEEN_MAX)))
+  }
+  async function sourceIdentity(snap, sid, uid) {
+    if (snap.sourceId) return String(snap.sourceId)
+    /* 旧备份缺来源库 ID；同一文件两种恢复入口仍使用相同身份。 */
+    if (sid === 'vault' || sid === 'vault-local') return 'backup:' + await digestId(JSON.stringify(snap))
+    return 'share:' + String(uid || '') + ':' + String(sid || '')
+  }
+  function legacyFingerprint(t) {
+    return JSON.stringify([t.book || '', t.date, t.type, t.amount, t.account, t.currency || '',
+      t.toAccount || '', t.toCurrency || '', t.category || '', t.note || ''])
   }
 
-  /* 稳定操作 ID：同一份快照的同一笔账目，无论重试多少次、换设备、清缓存，
-     都算出同一个 ID。写进 tags 的 `_op:` 里（用户不可见，cleanTags 会摘掉），
-     比只存本机的 seen 集合多一道跨设备防线。 */
-  function batchIdOf(snap, sid) {
+  /* 已部署 v1 写入的标记仍可查验；仅云端实际命中才采信，绝不信任跨账号旧缓存。 */
+  function legacyOperation(snap, sid, t) {
     const raw = String(sid || 'snap') + '|' + String(snap.at || '') + '|' + String((snap.transactions || []).length)
     let h = 5381
-    for (let i = 0; i < raw.length; i++) { h = ((h << 5) + h + raw.charCodeAt(i)) & 0x7fffffff }
-    return 'sh' + h.toString(36)
+    for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) & 0x7fffffff
+    return 'sh' + h.toString(36) + ':' + [t.date, t.type, t.amount, t.account, t.toAccount, t.category, t.note].join('|')
   }
 
   /* 合并一份快照。返回的 stats 里：
@@ -346,156 +394,287 @@ window.Share = (function () {
        failedItems  失败明细（指纹 + 备注 + 原因），供界面展示与重试 */
   async function mergeSnapshot(snap, label, sid, uid, opts) {
     const DB = S()
+    const target = { mode: DB.mode, uid: DB.state.uid, sourceId: DB.state.sourceId, identity: targetIdentity() }
+    const assertTarget = () => {
+      if (S() !== DB || DB.mode !== target.mode || DB.state.uid !== target.uid ||
+          (target.mode === 'guest' && DB.state.sourceId !== target.sourceId)) {
+        const error = new Error('恢复期间账号或本机账本已切换，已停止后续写入，请切回原账号后重试')
+        error.code = 'TARGET_CHANGED'
+        throw error
+      }
+    }
+    const checked = async operation => {
+      assertTarget()
+      const result = await operation()
+      assertTarget()
+      return result
+    }
     const stats = {
       book: '', accounts: 0, categories: 0,
       added: 0, transactions: 0, dup: 0, invalid: 0, failed: 0, skipped: 0,
-      goals: 0, budgets: 0, batchId: '', failedItems: [],
+      goals: 0, budgets: 0, batchId: '', failedItems: [], invalidItems: [], bookIds: [], bookNames: [],
     }
-
-    /* 1) 账本 */
-    const bookName = (label || snap.label || '共享账本').slice(0, 20)
-    let book = DB.books().find(b => b.name === bookName)
-    if (!book) {
-      book = await DB.addBook({ name: bookName, icon: '👨‍👩‍👧', sort_order: 90 })
-    }
-    stats.book = bookName
-    const bookId = book ? book.id : DB.defaultBookId()
-
-    /* 2) 账户（按名称对齐） */
-    const accMap = {}
-    for (const a of snap.accounts || []) {
-      const hit = DB.allAccounts().find(x => x.name === a.name)
-      if (hit) { accMap[a.name] = hit.id; continue }
-      const made = await DB.addAccount({
-        name: a.name, kind: a.kind || 'cash', icon: a.icon || '💰', color: a.color || '#2f6bff',
-        currency: a.currency || 'CNY', initial_balance: a.initial_balance || 0, sort_order: 95,
-      })
-      if (made) { accMap[a.name] = made.id; stats.accounts++ }
-    }
-
-    /* 3) 分类（先建父级，再建子级；按 类型+父级+名称 对齐） */
-    const catMap = {}
-    const byName = (kind, name, parent) => (DB.state.categories || []).find(c =>
-      c.kind === kind && c.name === name && ((c.parent_id || 0) === (parent || 0)))
-    const parents = (snap.categories || []).filter(c => !c.parent)
-    const children = (snap.categories || []).filter(c => c.parent)
-    for (const c of parents) {
-      const hit = byName(c.kind, c.name, null)
-      if (hit) { catMap[c.kind + '|' + c.name] = hit.id; continue }
-      try {
-        const made = await DB.addCategory({ kind: c.kind, name: c.name, icon: c.icon || '📦', color: c.color || '#8a93a6', parent_id: null })
-        if (made) { catMap[c.kind + '|' + c.name] = made.id; stats.categories++ }
-      } catch (e) { /* 单个失败不阻断 */ }
-    }
-    for (const c of children) {
-      const pid = catMap[c.kind + '|' + c.parent]
-      if (!pid) continue
-      const hit = byName(c.kind, c.name, pid)
-      if (hit) { catMap[c.kind + '|' + c.name] = hit.id; continue }
-      try {
-        const made = await DB.addCategory({ kind: c.kind, name: c.name, icon: c.icon || '', color: c.color || '#8a93a6', parent_id: pid })
-        if (made) { catMap[c.kind + '|' + c.name] = made.id; stats.categories++ }
-      } catch (e) { /* 忽略 */ }
-    }
-    const catOf = path => {
-      if (!path) return null
-      const parts = String(path).split('/')
-      if (parts.length >= 2) {
-        return catMap['expense|' + path] || catMap['income|' + path] ||
-          catMap['expense|' + parts[parts.length - 1]] || catMap['income|' + parts[parts.length - 1]] || null
-      }
-      return catMap['expense|' + path] || catMap['income|' + path] || null
-    }
-
-    /* 4) 账目（指纹去重） */
-    const seen = seenSet()
-    const batchId = batchIdOf(snap, sid)
+    const source = await checked(() => sourceIdentity(snap, sid, uid))
+    const batchId = 'sh2-' + await checked(() => digestId(source))
     stats.batchId = batchId
-    const batch = []
+    const entityKey = 'ledger10_snapshot_entities:v2:' + encodeURIComponent(target.identity) + ':' + batchId
+    const entities = readJson(entityKey, {}) || {}
+    const savedBooks = new Map(Array.isArray(entities.books) ? entities.books : [])
+    const savedAccounts = new Map(Array.isArray(entities.accounts) ? entities.accounts : [])
+    const savedGoals = new Map(Array.isArray(entities.goals) ? entities.goals : [])
+    const savedTransactions = new Map(Array.isArray(entities.transactions) ? entities.transactions : [])
+    const saveEntities = () => {
+      assertTarget()
+      writeJson(entityKey, { books: Array.from(savedBooks), accounts: Array.from(savedAccounts), goals: Array.from(savedGoals), transactions: Array.from(savedTransactions) })
+    }
+
+    /* 1) 保留来源账本；label 只是本次恢复/加入的显示名称。旧快照无归属时才用恢复账本。 */
+    const bookName = (label || snap.label || '共享账本').slice(0, 20)
+    stats.book = bookName
+    const bookMap = new Map()
+    const booksByName = new Map()
+    const usedBooks = new Set()
+    const rememberName = (map, name, id) => {
+      if (!map.has(name)) map.set(name, id)
+      else if (map.get(name) !== id) map.set(name, null) /* 同名歧义不能猜 */
+    }
+    for (const b of snap.books || []) {
+      const mapped = b.id != null ? savedBooks.get(String(b.id)) : null
+      let book = mapped != null ? DB.books().find(x => x.id === mapped && !usedBooks.has(x.id)) : null
+      if (!book) book = DB.books().find(x => x.name === b.name && !usedBooks.has(x.id))
+      if (!book) book = await checked(() => DB.addBook({ name: b.name, icon: b.icon || '📒', sort_order: 90 }))
+      if (!book) throw new Error('恢复账本失败，请重试')
+      usedBooks.add(book.id)
+      if (b.id != null) {
+        bookMap.set(String(b.id), book.id)
+        savedBooks.set(String(b.id), book.id)
+        saveEntities()
+      }
+      rememberName(booksByName, b.name, book.id)
+    }
+    /* v1 交易保留了 book 名称，即使 books 列表不完整也可恢复。 */
+    for (const item of [].concat(snap.transactions || [], snap.goals || [], snap.budgets || [])) {
+      if (!item.book || booksByName.has(item.book)) continue
+      let book = DB.books().find(x => x.name === item.book)
+      if (!book) book = await checked(() => DB.addBook({ name: item.book, icon: '📒', sort_order: 90 }))
+      if (!book) throw new Error('恢复账本失败，请重试')
+      booksByName.set(item.book, book.id)
+    }
+    let fallbackBookId = null
+    const bookOf = async item => {
+      if (item.book_id != null && bookMap.has(String(item.book_id))) return bookMap.get(String(item.book_id))
+      if (item.book && booksByName.get(item.book)) return booksByName.get(item.book)
+      if (item.book || item.book_id != null) return null
+      const unique = Array.from(new Set(Array.from(booksByName.values()).filter(id => id != null)))
+      if (unique.length === 1) return unique[0]
+      if (!fallbackBookId) {
+        let book = DB.books().find(b => b.name === bookName)
+        if (!book) book = await checked(() => DB.addBook({ name: bookName, icon: '📒', sort_order: 90 }))
+        fallbackBookId = book ? book.id : DB.defaultBookId()
+      }
+      return fallbackBookId
+    }
+
+    /* 2) 新快照按 ID 映射；旧快照只在名称/币种不歧义时对齐。 */
+    const accMap = new Map()
+    const accNames = new Map()
+    const accNamesCurrency = new Map()
+    const usedAccounts = new Set()
+    for (const a of snap.accounts || []) {
+      const currency = a.currency || 'CNY'
+      const mapped = a.id != null ? savedAccounts.get(String(a.id)) : null
+      let made = mapped != null ? DB.allAccounts().find(x => x.id === mapped && (x.currency || 'CNY') === currency && !usedAccounts.has(x.id)) : null
+      if (!made) made = DB.allAccounts().find(x => x.name === a.name && (x.currency || 'CNY') === currency &&
+        (x.kind || 'cash') === (a.kind || 'cash') && (Number(x.initial_balance) || 0) === (Number(a.initial_balance) || 0) && !usedAccounts.has(x.id))
+      if (!made) {
+        made = await checked(() => DB.addAccount({
+          name: a.name, kind: a.kind || 'cash', icon: a.icon || '💰', color: a.color || '#2f6bff',
+          currency: currency, initial_balance: a.initial_balance || 0, sort_order: 95,
+        }))
+        if (made) stats.accounts++
+      }
+      if (!made) continue
+      usedAccounts.add(made.id)
+      if (a.id != null) {
+        accMap.set(String(a.id), made.id)
+        savedAccounts.set(String(a.id), made.id)
+        saveEntities()
+      }
+      rememberName(accNames, a.name, made.id)
+      rememberName(accNamesCurrency, JSON.stringify([a.name, currency]), made.id)
+    }
+    const accountOf = (id, name, currency) => {
+      if (id != null) return accMap.get(String(id)) || null
+      return currency ? accNamesCurrency.get(JSON.stringify([name, currency])) || null : accNames.get(name) || null
+    }
+
+    /* 3) 分类完整路径与类型共同定位，新快照优先稳定 ID。 */
+    const catMap = new Map()
+    const catPaths = new Map()
+    const sourcePaths = new Map()
+    const keyOf = (kind, path) => JSON.stringify([kind, path])
+    const byName = (kind, name, parent) => (DB.state.categories || []).find(c =>
+      c.kind === kind && c.name === name && String(c.parent_id || '') === String(parent || ''))
+    let pending = (snap.categories || []).slice()
+    while (pending.length) {
+      const remaining = []
+      let progressed = false
+      for (const c of pending) {
+        let pid = null
+        let parentPath = ''
+        if (c.parent_id != null) {
+          pid = catMap.get(String(c.parent_id))
+          parentPath = sourcePaths.get(String(c.parent_id))
+          if (!pid || !parentPath) { remaining.push(c); continue }
+        } else if (c.parent) {
+          pid = catPaths.get(keyOf(c.kind, c.parent))
+          parentPath = c.parent
+          if (!pid) { remaining.push(c); continue }
+        }
+        let made = byName(c.kind, c.name, pid)
+        if (!made) {
+          made = await checked(() => DB.addCategory({ kind: c.kind, name: c.name, icon: c.icon || '📦', color: c.color || '#8a93a6', parent_id: pid }))
+          if (made) stats.categories++
+        }
+        if (!made) throw new Error('恢复分类失败，请重试')
+        const path = parentPath ? parentPath + '/' + c.name : c.name
+        if (c.id != null) {
+          catMap.set(String(c.id), made.id)
+          sourcePaths.set(String(c.id), path)
+        }
+        rememberName(catPaths, keyOf(c.kind, path), made.id)
+        progressed = true
+      }
+      if (!progressed) throw new Error('备份分类的父级关系不完整，未继续恢复账目')
+      pending = remaining
+    }
+    const catOf = (id, path, kind) => {
+      if (id != null) return catMap.get(String(id)) || null
+      return path && kind ? catPaths.get(keyOf(kind, path)) || null : null
+    }
+
+    /* 4) 交易身份按来源库/记录定位，旧快照按同内容出现次数区分合法重复行。 */
+    const seen = seenSet(target.identity)
+    const occurrences = new Map()
+    const sourceIds = new Set()
+    const invalid = (t, fp, message) => {
+      stats.invalid++
+      stats.invalidItems.push({ fp: fp, note: t.note || '', amount: t.amount, date: t.date || '', err: message })
+    }
     for (const t of snap.transactions || []) {
-      const fp = fpOf(t)
-      /* 只重试失败项时，别的行直接放过（它们上次已经处理过，不该重复计数） */
+      assertTarget()
+      const content = legacyFingerprint(t)
+      const occurrence = occurrences.get(content) || 0
+      occurrences.set(content, occurrence + 1)
+      const identity = t.id != null ? 'id:' + t.id : 'row:' + content + ':' + occurrence
+      const fp = batchId + ':' + await checked(() => digestId(identity))
       if (opts && opts.onlyFp && opts.onlyFp.indexOf(fp) < 0) continue
-      if (seen.has(fp)) { stats.dup++; continue }
+      if (t.id != null && sourceIds.has(String(t.id))) { invalid(t, fp, '备份内交易 ID 重复'); continue }
+      if (t.id != null) sourceIds.add(String(t.id))
       const kind = t.type === 'income' ? 'income' : 'expense'
-      let catId = catOf(t.category)
-      if (!catId) {
+      let catId = catOf(t.category_id, t.category, kind)
+      if (t.type !== 'transfer' && !catId) {
+        if (t.category_id != null || t.category) { invalid(t, fp, '原分类不存在或名称有歧义，请检查备份分类关系'); continue }
         const fallback = (DB.state.categories || []).find(c => c.kind === kind && !c.parent_id && c.name === '其他')
         catId = fallback ? fallback.id : null
       }
-      const accId = accMap[t.account] || (DB.accounts()[0] ? DB.accounts()[0].id : null)
-      if (!accId) { stats.invalid++; continue }
-      const toId = t.type === 'transfer' ? (accMap[t.toAccount] || null) : null
-      if (t.type === 'transfer' && (!toId || toId === accId)) { stats.invalid++; continue }
-      /* 跨设备防线：同一份快照的同一笔，别的地方已经落过库了。
-         ⚠️ 只有云端后端认 `_op:` 标记（hasOp 真实生效）；游客侧没有跨设备一说，
-         硬写标记只会污染本机标签栏，所以游客模式不加。 */
-      const opId = batchId + ':' + fp
-      if (DB.mode === 'cloud' && DB.hasOp) {
-        try {
-          if (await DB.hasOp('transactions', opId)) { stats.dup++; seen.add(fp); continue }
-        } catch (e) { /* 查不动就按新账目写，交给下面的 try 兜底 */ }
+      const accId = accountOf(t.account_id, t.account, t.currency)
+      const toId = t.type === 'transfer' ? accountOf(t.to_account_id, t.toAccount, t.toCurrency) : null
+      const bookId = await checked(() => bookOf(t))
+      const hasAccountRef = t.account_id != null || !!t.account
+      if ((!accId && hasAccountRef) || !bookId || (t.type === 'transfer' && (!accId || !toId || toId === accId))) {
+        invalid(t, fp, !bookId ? '原账本不存在或名称有歧义' : '原账户/转账目标不存在、币种或名称有歧义')
+        continue
       }
-      const row = {
-        txn_type: t.type,
-        amount: t.amount,
-        occurred_at: F.iso(F.parseInput(t.date)),
-        account_id: accId,
-        to_account_id: toId,
-        category_id: t.type === 'transfer' ? null : catId,
-        note: t.note || '',
-        tags: DB.mode === 'cloud' && DB.opTag ? (t.tags || []).concat([DB.opTag(opId)]) : (t.tags || []),
-        reimbursable: !!t.reimbursable,
-        book_id: bookId,
-      }
-      batch.push({ row: row, fp: fp, note: t.note || '', amount: t.amount, date: t.date })
-    }
-    for (const item of batch) {
       try {
-        await DB.addTransaction(item.row)
+        if (DB.mode === 'cloud' && DB.hasOp) {
+          /* 云端必须真实查到记录才算重复；缓存不能证明当前账号仍持有它。 */
+          let found = await checked(() => DB.hasOp('transactions', fp))
+          if (!found) found = await checked(() => DB.hasOp('transactions', legacyOperation(snap, sid, t)))
+          if (!found && (sid === 'vault' || sid === 'vault-local')) {
+            found = await checked(() => DB.hasOp('transactions', legacyOperation(snap, sid === 'vault' ? 'vault-local' : 'vault', t)))
+          }
+          if (found) { stats.dup++; seen.add(fp); continue }
+        } else {
+          const previousId = savedTransactions.get(fp)
+          const existing = previousId != null ? await checked(() => DB.getTransaction(previousId)) : null
+          /* 回收站仍保留原记录，尊重用户软删除；物理删除后允许从备份补回。 */
+          if (existing) {
+            savedTransactions.set(fp, existing.id)
+            saveEntities()
+            stats.dup++; seen.add(fp); continue
+          }
+          savedTransactions.delete(fp)
+          seen.delete(fp)
+        }
+        const tags = (Array.isArray(t.tags) ? t.tags : []).filter(tag => typeof tag !== 'string' || tag.slice(0, 4) !== '_op:')
+        const row = {
+          txn_type: t.type, amount: t.amount, occurred_at: F.iso(F.parseInput(t.date)),
+          account_id: accId, to_account_id: toId, category_id: t.type === 'transfer' ? null : catId,
+          note: t.note || '', tags: DB.mode === 'cloud' && DB.opTag ? tags.concat([DB.opTag(fp)]) : tags,
+          reimbursable: !!t.reimbursable, book_id: bookId,
+        }
+        const made = await checked(() => DB.addTransaction(row))
+        if (made && made.id != null) { savedTransactions.set(fp, made.id); saveEntities() }
         stats.added++
-        /* 只有真正落库了才记住这个指纹：失败的留着，重试时还能再试 */
-        seen.add(item.fp)
+        seen.add(fp)
       } catch (e) {
+        assertTarget()
         stats.failed++
-        stats.failedItems.push({
-          fp: item.fp, note: item.note || '', amount: item.amount, date: item.date || '',
-          err: (e && e.message) || String(e),
-        })
+        stats.failedItems.push({ fp: fp, note: t.note || '', amount: t.amount, date: t.date || '', err: (e && e.message) || String(e) })
       }
     }
-    /* seen 里现在只有「确实在库里」的指纹，写回本机是安全的 */
-    saveSeen(seen)
-    /* 老界面/老测试读的 transactions = 真正写成功的笔数 */
+    assertTarget()
+    saveSeen(seen, target.identity)
     stats.transactions = stats.added
-    /* 老界面/老测试读的 skipped = 重复 + 不合法 + 失败 */
     stats.skipped = stats.dup + stats.invalid + stats.failed
 
-    /* 5) 攒钱目标（按名称对齐） */
+    /* 5) 独立目标按来源 ID 一一映射，不能吞掉同账本的两个同名目标。 */
+    const usedGoals = new Set()
     for (const g of snap.goals || []) {
-      const hit = DB.listGoals().find(x => x.name === g.name)
-      if (hit) continue
-      try {
-        await DB.addGoal({
+      const bookId = await checked(() => bookOf(g))
+      if (!bookId) continue
+      const allGoals = DB.state.goals || DB.listGoals()
+      const mapped = g.id != null ? savedGoals.get(String(g.id)) : null
+      let made = mapped != null ? allGoals.find(x => x.id === mapped && !usedGoals.has(x.id)) : null
+      if (!made) made = allGoals.find(x => !usedGoals.has(x.id) && x.name === g.name &&
+        String(x.book_id || DB.defaultBookId()) === String(bookId) &&
+        Number(x.target_amount) === Number(g.target_amount) && (Number(x.saved_amount) || 0) === (Number(g.saved_amount) || 0))
+      if (!made) {
+        made = await checked(() => DB.addGoal({
           name: g.name, icon: g.icon || '🎯', target_amount: g.target_amount || 0,
-          saved_amount: g.saved_amount || 0, deadline: g.deadline || null, done: !!g.done,
-          book_id: bookId,
-        })
+          saved_amount: g.saved_amount || 0, deadline: g.deadline || null, done: !!g.done, book_id: bookId,
+        }))
+        if (!made) throw new Error('恢复攒钱目标失败，请重试')
         stats.goals++
-      } catch (e) { /* 忽略 */ }
+      }
+      usedGoals.add(made.id)
+      if (g.id != null) { savedGoals.set(String(g.id), made.id); saveEntities() }
     }
 
-    /* 6) 预算（按月 + 分类对齐） */
-    for (const b of snap.budgets || []) {
-      if (!b.month_key || !b.amount) continue
-      const catId = b.category ? catOf(b.category) : null
-      try {
+    /* 6) 预算对齐 月 + 分类 + 账本，恢复后还原用户原来的视图。 */
+    const previousBook = DB.activeBookId()
+    try {
+      for (const b of snap.budgets || []) {
+        if (!b.month_key || !b.amount) continue
+        const bookId = await checked(() => bookOf(b))
+        if (!bookId) continue
+        const catId = b.category_id != null || b.category ? catOf(b.category_id, b.category, b.category_kind || 'expense') : null
+        if ((b.category_id != null || b.category) && !catId) continue
+        assertTarget()
+        DB.setActiveBook(bookId)
         if (DB.budgetOf(b.month_key, catId) == null) {
-          await DB.setBudget(b.month_key, catId, b.amount)
+          await checked(() => DB.setBudget(b.month_key, catId, b.amount, bookId))
           stats.budgets++
         }
-      } catch (e) { /* 忽略 */ }
+      }
+    } finally {
+      if (S() === DB && DB.mode === target.mode && DB.state.uid === target.uid &&
+          (target.mode !== 'guest' || DB.state.sourceId === target.sourceId)) DB.setActiveBook(previousBook)
     }
+    assertTarget()
+    stats.bookIds = Array.from(new Set(Array.from(bookMap.values()).concat(Array.from(booksByName.values()), fallbackBookId).filter(id => id != null)))
+    stats.bookNames = stats.bookIds.map(id => (DB.books().find(b => b.id === id) || {}).name || '账本')
 
     /* 记录到「我加入的」 */
     const joins = joinedShares().filter(x => x.sid !== sid)
@@ -555,7 +734,7 @@ window.Share = (function () {
         '</div></div>').join('') + '</div>'
     }
     html += '<button class="btn block" id="shJoin" style="margin-top:12px">' + ic('key') + ' 用共享码加入</button>'
-    html += '<div class="hint">共享内容不含图片凭证；金额按「分」原样传递，账户币种一并带过来。</div>'
+    html += '<div class="hint">共享内容不含图片凭证；金额与原账户币种一并保留。</div>'
 
     U().openSheet(html)
     document.getElementById('shClose').addEventListener('click', U().closeSheet)
@@ -716,7 +895,7 @@ window.Share = (function () {
   function openJoinSheet(prefill) {
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">加入共享账本</span><button id="jnClose" class="btn sm line">关闭</button></div>' +
-      '<div class="small muted" style="margin-bottom:10px">把家人给你的共享码粘贴到下面。加入后账目会合并到一个独立账本里，' +
+      '<div class="small muted" style="margin-bottom:10px">把家人给你的共享码粘贴到下面。加入后会保留来源账本归属，' +
       '可以随时回来「刷新」拉取最新。</div>' +
       '<div class="field"><label>共享码</label>' +
       '<textarea id="jnCode" class="textarea" rows="3" placeholder="SG1-xxxxxxxx-xxxxxxxxxxxx">' + F.escapeHtml(prefill || '') + '</textarea></div>' +
@@ -740,7 +919,7 @@ window.Share = (function () {
       '<div class="card">' +
       '<div class="kv"><span>新增账目</span><b class="num" style="color:var(--income)">' + stats.added + ' 笔</b></div>' +
       '<div class="kv"><span>跳过（已存在）</span><b class="num">' + stats.dup + ' 笔</b></div>' +
-      (stats.invalid ? '<div class="kv"><span>不合规（缺账户/转账目标）</span><b class="num">' + stats.invalid + ' 笔</b></div>' : '') +
+      (stats.invalid ? '<div class="kv"><span>未导入（关联关系需检查）</span><b class="num">' + stats.invalid + ' 笔</b></div>' : '') +
       (stats.failed ? '<div class="kv"><span style="color:var(--expense)">写入失败</span>' +
         '<b class="num" style="color:var(--expense)">' + stats.failed + ' 笔</b></div>' : '') +
       '<div class="kv"><span>新建账户</span><b class="num">' + stats.accounts + ' 个</b></div>' +
@@ -748,34 +927,36 @@ window.Share = (function () {
       (stats.goals ? '<div class="kv"><span>新建攒钱目标</span><b class="num">' + stats.goals + ' 个</b></div>' : '') +
       (stats.budgets ? '<div class="kv"><span>同步预算</span><b class="num">' + stats.budgets + ' 条</b></div>' : '') +
       '</div>'
-    if (stats.failed && stats.failedItems && stats.failedItems.length) {
+    const issues = (stats.invalidItems || []).concat(stats.failedItems || [])
+    if (issues.length) {
       h += '<div class="card"><div class="small" style="color:var(--expense);font-weight:600">' +
-        '下面 ' + stats.failedItems.length + ' 笔没有写入，也没有被算成「已存在」，重试即可补回：</div>' +
-        stats.failedItems.slice(0, 5).map(f =>
+        '下面 ' + issues.length + ' 笔没有写入，也没有被算成「已存在」；请按原因修正或重试：</div>' +
+        issues.slice(0, 5).map(f =>
           '<div class="small muted" style="margin-top:4px">· ' + esc(f.date || '') + ' ' +
           esc(f.note || '(无备注)') + ' —— ' + esc(f.err || '未知原因') + '</div>').join('') +
-        (stats.failedItems.length > 5 ? '<div class="small muted">…等共 ' + stats.failedItems.length + ' 笔</div>' : '') +
+        (issues.length > 5 ? '<div class="small muted">…等共 ' + issues.length + ' 笔</div>' : '') +
         '</div>'
     }
-    h += '<div class="small muted">账目已归到账本「' + esc(stats.book) + '」，在顶部账本切换里可以单独查看。' +
+    h += '<div class="small muted">账目保留在「' + esc((stats.bookNames || [stats.book]).join('、')) + '」，可在顶部切换账本查看。' +
       '同一份快照重复导入不会产生重复账目。</div>' +
       (stats.noBalances ? '<div class="small muted" style="margin-top:4px">这份共享没有包含账户余额，' +
         '导入的账户余额按 0 起算，以你自己这边的实际金额为准。</div>' : '') +
       (stats.failed ? '<button class="btn block" id="jrRetry" style="margin-top:12px">重试剩余 ' + stats.failed + ' 笔</button>' : '') +
-      '<button class="btn block" id="jrGo" style="margin-top:12px">去看这个账本</button>'
+      '<button class="btn block" id="jrGo" style="margin-top:12px">查看导入账目</button>'
     return h
   }
 
   function showJoinReport(stats) {
     U().openSheet(
-      '<div class="sheet-head"><span class="sheet-title">' + (stats.failed ? '部分账目未写入' : '已加入共享账本') +
+      '<div class="sheet-head"><span class="sheet-title">' + (stats.failed || stats.invalid ? '部分账目未写入' : '已加入共享账本') +
       '</span><button id="jrClose" class="btn sm line">关闭</button></div>' + joinReportHtml(stats)
     )
     document.getElementById('jrClose').addEventListener('click', U().closeSheet)
     document.getElementById('jrGo').addEventListener('click', async () => {
       U().closeSheet()
-      const b = S().books().find(x => x.name === stats.book)
-      if (b) { S().setActiveBook(b.id); window.App.setTab('home') }
+      const ids = stats.bookIds || []
+      S().setActiveBook(ids.length === 1 ? ids[0] : null)
+      window.App.setTab('home')
     })
     const retry = document.getElementById('jrRetry')
     if (retry) {
@@ -851,3 +1032,4 @@ window.Share = (function () {
     openShareCenter, openPublishSheet, openJoinSheet, handleUrlHash,
   }
 })()
+

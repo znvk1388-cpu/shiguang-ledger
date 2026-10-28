@@ -19,6 +19,11 @@ window.Insight = (function () {
     ;(rows || []).forEach(m => { income += F.toCents(m.income); expense += F.toCents(m.expense) })
     return { income, expense, balance: income - expense }
   }
+  function baseAmountReader() {
+    const currencies = {}
+    S.allAccounts().forEach(a => { currencies[a.id] = a.currency || 'CNY' })
+    return row => F.toBase(F.toCents(row.amount), currencies[row.account_id] || 'CNY')
+  }
   function yearRange(y) { return { from: F.iso(new Date(y, 0, 1)), to: F.iso(new Date(y + 1, 0, 1)) } }
 
   /* ---------------- 一、报表中心 ---------------- */
@@ -52,7 +57,7 @@ window.Insight = (function () {
       '<button class="btn block" id="rpPoster">' + ic('palette') + ' 生成本月账单海报</button>' +
       '<button class="btn line block" id="rpYearImg" style="margin-top:8px">' + ic('upload') + ' 导出年度报告图片</button>' +
       '<button class="btn line block" id="rpCsv" style="margin-top:8px">' + ic('upload') + ' 导出当前筛选明细 CSV</button>' +
-      '<div class="hint">报表全部由你的账目实时计算，不额外上传任何数据</div>'
+      '<div class="hint">常规报表在本机计算；AI 问账会按提问页说明发送数据。</div>'
     )
     document.getElementById('rpClose').addEventListener('click', U().closeSheet)
     document.getElementById('rpAsk').addEventListener('click', () => {
@@ -295,6 +300,8 @@ window.Insight = (function () {
 
   /* ---------- 分类趋势 ---------- */
   async function openCatTrend() {
+    const sym = F.escapeHtml(F.currencySym(F.baseCurrency()))
+    const money = cents => F.moneySym(cents, sym)
     const roots = S.rootCategories('expense')
     if (!roots.length) { U().toast('还没有支出分类'); return }
     let sel = roots[0].id
@@ -306,6 +313,7 @@ window.Insight = (function () {
       const from = F.iso(new Date(now.getFullYear(), now.getMonth() - 11, 1))
       const to = F.iso(new Date(now.getFullYear(), now.getMonth() + 1, 1))
       const { rows } = await S.listTransactions({ from, to, type: 'expense', limit: 100000 })
+      const toBase = baseAmountReader()
       const byMonth = {}
       for (let i = 11; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
@@ -314,16 +322,16 @@ window.Insight = (function () {
       rows.forEach(t => {
         if (ids.indexOf(t.category_id) < 0) return
         const k = F.monthOf(t.occurred_at)
-        if (byMonth[k] != null) byMonth[k] += F.toCents(t.amount)
+        if (byMonth[k] != null) byMonth[k] += toBase(t)
       })
       const points = Object.keys(byMonth).sort().map(k => ({ label: Number(k.slice(5)) + '月', value: byMonth[k] }))
       const total = points.reduce((s, p) => s + p.value, 0)
       const peak = points.reduce((a, b) => (b.value > a.value ? b : a), points[0] || { value: 0 })
       const html = '<div class="card"><div class="between" style="margin-bottom:6px"><b>近 12 个月走势</b>' +
-        '<span class="tiny muted">合计 ¥' + F.yuan(total) + '</span></div>' +
+        '<span class="tiny muted">合计 ' + sym + F.yuan(total) + '</span></div>' +
         C.line(points) +
-        '<div class="small muted" style="margin-top:6px">最高 ' + (peak ? peak.label : '—') + ' ¥' + F.yuan(peak ? peak.value : 0) +
-        ' · 月均 ¥' + F.yuan(Math.round(total / 12)) + '</div></div>'
+        '<div class="small muted" style="margin-top:6px">最高 ' + (peak ? peak.label : '—') + ' ' + sym + F.yuan(peak ? peak.value : 0) +
+        ' · 月均 ' + sym + F.yuan(Math.round(total / 12)) + '</div></div>'
       return { html: html, data: { root: root, points: points, total: total, peak: peak } }
     }
     let body = (await render()).html
@@ -343,22 +351,22 @@ window.Insight = (function () {
       const maxV = Math.max(1, ...d.points.map(p => p.value))
       const spec = {
         title: '分类趋势 · ' + (d.root ? d.root.name : ''),
-        subtitle: '近 12 个月 · 合计 ¥' + F.yuan(d.total),
+        subtitle: '近 12 个月 · 合计 ' + sym + F.yuan(d.total),
         hero: {
-          label: '12 个月合计', value: F.money(d.total),
-          note: '月均 ¥' + F.yuan(Math.round(d.total / 12)),
+          label: '12 个月合计', value: money(d.total),
+          note: '月均 ' + sym + F.yuan(Math.round(d.total / 12)),
           tone: 'brand',
         },
         stats: [
-          { k: '最高月份', v: d.peak ? d.peak.label : '—', note: d.peak ? F.money(d.peak.value) : '', tone: 'text' },
-          { k: '月均', v: F.money(Math.round(d.total / 12)), note: '12 个月平均', tone: 'text' },
+          { k: '最高月份', v: d.peak ? d.peak.label : '—', note: d.peak ? money(d.peak.value) : '', tone: 'text' },
+          { k: '月均', v: money(Math.round(d.total / 12)), note: '12 个月平均', tone: 'text' },
           { k: '有记录月份', v: String(d.points.filter(p => p.value > 0).length) + ' 个月', note: '共 12 个月', tone: 'text' },
         ],
         sections: [
           {
             title: '各月支出', note: '单位：元',
             bars: d.points.map(p => ({
-              name: p.label, value: p.value, text: F.money(p.value),
+              name: p.label, value: p.value, text: money(p.value),
               tone: p.value === maxV ? 'expense' : 'brand',
             })),
           },
@@ -367,7 +375,7 @@ window.Insight = (function () {
       if (top.length) {
         spec.sections.push({
           title: '支出最多的月份', note: 'Top ' + top.length,
-          rows: top.map(p => ({ k: p.label, v: F.money(p.value), note: '占 ' + (d.total > 0 ? (p.value / d.total * 100).toFixed(0) : 0) + '%', tone: 'expense' })),
+          rows: top.map(p => ({ k: p.label, v: money(p.value), note: '占 ' + (d.total > 0 ? (p.value / d.total * 100).toFixed(0) : 0) + '%', tone: 'expense' })),
         })
       }
       try { showReportImage('分类趋势图片', buildReportImage(spec), '拾光记账-分类趋势-' + (d.root ? d.root.name : '') + '.png') } catch (e) { U().toast('生成图片失败') }
@@ -403,6 +411,8 @@ window.Insight = (function () {
     const accs = S.allAccounts()
     const a = accs.find(x => x.id === accountId)
     if (!a) return
+    const currency = a.currency || 'CNY'
+    const money = cents => F.moneySym(cents, F.currencySym(currency))
     const now = new Date()
     const defFrom = F.iso(new Date(now.getFullYear(), now.getMonth(), 1))
     const defTo = F.iso(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -426,41 +436,55 @@ window.Insight = (function () {
         return '<div class="kv"><span>' + F.isoDay(t.occurred_at).slice(5) + '　' + F.escapeHtml(name) +
           (t.note ? '<div class="tiny muted ellipsis">' + F.escapeHtml(t.note) + '</div>' : '') + '</span>' +
           '<b class="num" style="color:' + (delta >= 0 ? 'var(--income)' : 'var(--expense)') + '">' +
-          (delta >= 0 ? '+' : '-') + F.money(Math.abs(delta)) + '</b></div>'
+          (delta >= 0 ? '+' : '-') + F.escapeHtml(money(Math.abs(delta))) + '</b></div>'
       }).join('')
       return { count: sorted.length, inflow, outflow, html: lines || '<div class="small muted" style="padding:14px">该区间没有流水</div>', rows: sorted }
     }
     let r = await render(defFrom, defTo)
     U().openSheet(
-      '<div class="sheet-head"><span class="sheet-title">对账单 · ' + F.escapeHtml(a.name) + '</span><button id="sClose" class="btn sm line">关闭</button></div>' +
+      '<div class="sheet-head"><span class="sheet-title">对账单 · ' + F.escapeHtml(a.name) + '（' + F.escapeHtml(currency) + '）</span><button id="sClose" class="btn sm line">关闭</button></div>' +
       '<div class="row" style="gap:8px;margin-bottom:10px">' +
       '<input id="stFrom" class="input grow" type="date" value="' + defFrom.slice(0, 10) + '">' +
       '<span class="muted">—</span>' +
-      '<input id="stTo" class="input grow" type="date" value="' + defTo.slice(0, 10) + '">' +
+      '<input id="stTo" class="input grow" type="date" value="' + F.dstr(new Date(now.getFullYear(), now.getMonth() + 1, 0)) + '">' +
       '</div>' +
       '<div class="card" style="background:var(--brand-soft);box-shadow:none">' +
-      '<div class="row"><div class="grow"><div class="small muted">期间流入</div><div class="num" style="color:var(--income);font-weight:700">¥' + F.yuan(r.inflow) + '</div></div>' +
-      '<div class="grow"><div class="small muted">期间流出</div><div class="num" style="color:var(--expense);font-weight:700">¥' + F.yuan(r.outflow) + '</div></div>' +
-      '<div class="grow"><div class="small muted">笔数</div><div class="num" style="font-weight:700">' + r.count + '</div></div></div></div>' +
+      '<div class="row"><div class="grow"><div class="small muted">期间流入</div><div id="stInflow" class="num" style="color:var(--income);font-weight:700">' + F.escapeHtml(money(r.inflow)) + '</div></div>' +
+      '<div class="grow"><div class="small muted">期间流出</div><div id="stOutflow" class="num" style="color:var(--expense);font-weight:700">' + F.escapeHtml(money(r.outflow)) + '</div></div>' +
+      '<div class="grow"><div class="small muted">笔数</div><div id="stCount" class="num" style="font-weight:700">' + r.count + '</div></div></div></div>' +
       '<div class="card" id="stBody">' + r.html + '</div>' +
       '<button class="btn line block" id="stCsv">导出对账单 CSV</button>'
     )
     document.getElementById('sClose').addEventListener('click', U().closeSheet)
+    const body = document.getElementById('stBody')
+    let reloadSequence = 0
     const reload = async () => {
+      const ticket = ++reloadSequence
       const f = document.getElementById('stFrom').value
       const t = document.getElementById('stTo').value
-      r = await render(f ? F.iso(F.parseInput(f)) : defFrom, t ? F.iso(new Date(F.parseInput(t).getTime() + 86400000)) : defTo)
-      document.getElementById('stBody').innerHTML = r.html
+      const end = t ? F.ymdLocal(t) : null
+      if (end) end.setDate(end.getDate() + 1)
+      try {
+        const next = await render(f ? F.iso(F.ymdLocal(f)) : defFrom, end ? F.iso(end) : defTo)
+        if (ticket !== reloadSequence || document.getElementById('stBody') !== body) return
+        r = next
+        body.innerHTML = r.html
+        document.getElementById('stInflow').textContent = money(r.inflow)
+        document.getElementById('stOutflow').textContent = money(r.outflow)
+        document.getElementById('stCount').textContent = String(r.count)
+      } catch (e) {
+        if (ticket === reloadSequence && document.getElementById('stBody') === body) U().toast('读取对账单失败，请重试')
+      }
     }
     document.getElementById('stFrom').addEventListener('change', reload)
     document.getElementById('stTo').addEventListener('change', reload)
     document.getElementById('stCsv').addEventListener('click', () => {
-      const head = ['日期', '类型', '分类/流向', '账户', '目标账户', '备注', '金额']
+      const head = ['日期', '类型', '分类/流向', '账户', '目标账户', '备注', '金额', '币种']
       const lines = [head.join(',')].concat(r.rows.map(t => [
         F.isoLocal(t.occurred_at), window.TXN_TYPE_LABEL[t.txn_type] || t.txn_type,
         t.category_id ? S.categoryName(t.category_id) : '',
         S.accountName(t.account_id), t.to_account_id ? S.accountName(t.to_account_id) : '',
-        t.note || '', t.amount,
+        t.note || '', t.amount, currency,
       ].map(v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"').join(',')))
       download('对账单-' + a.name + '-' + F.dstr(new Date()) + '.csv', '\ufeff' + lines.join('\n'), 'text/csv;charset=utf-8')
       U().toast('已导出')
@@ -538,13 +562,14 @@ window.Insight = (function () {
   }
   async function collectTags() {
     const { rows } = await S.listTransactions({ limit: 100000 })
+    const toBase = baseAmountReader()
     const stat = {}
     rows.forEach(t => (t.tags || []).forEach(tag => {
       if (!tag || isInternalTag(tag)) return
       const k = String(tag)
       stat[k] = stat[k] || { count: 0, amount: 0 }
       stat[k].count++
-      if (t.txn_type === 'expense') stat[k].amount += F.toCents(t.amount)
+      if (t.txn_type === 'expense') stat[k].amount += toBase(t)
     }))
     return { stat, rows }
   }
@@ -609,6 +634,7 @@ window.Insight = (function () {
   }
 
   async function openTagReport() {
+    const sym = F.escapeHtml(F.currencySym(F.baseCurrency()))
     const C = await charts()
     const { stat } = await collectTags()
     const items = Object.keys(stat).map(t => ({ name: t, value: stat[t].amount, count: stat[t].count }))
@@ -621,7 +647,7 @@ window.Insight = (function () {
           C.barList(items.slice(0, 15).map(x => ({ name: x.name, value: x.value, color: '#7c5cff' }))) + '</div>' +
           '<div class="card">' + items.slice(0, 20).map(x =>
             '<div class="kv"><span>' + F.escapeHtml(x.name) + '<div class="tiny muted">' + x.count + ' 笔</div></span>' +
-            '<b class="num">¥' + F.yuan(x.value) + '</b></div>').join('') + '</div>'
+            '<b class="num">' + sym + F.yuan(x.value) + '</b></div>').join('') + '</div>'
         : '<div class="empty" style="padding:24px">暂无带标签的支出</div>')
     )
     document.getElementById('trClose').addEventListener('click', U().closeSheet)
@@ -745,6 +771,8 @@ window.Insight = (function () {
   /* 从四个角度指出「钱悄悄流走的地方」：固定/订阅支出、高频小额聚集区、
      大额支出、环比异常分类。全部由现有账目实时聚合，不新增表结构。 */
   async function openAudit() {
+    const sym = F.escapeHtml(F.currencySym(F.baseCurrency()))
+    const money = cents => F.moneySym(cents, sym)
     const esc = F.escapeHtml
     const st = window.App.state
     const y = st.year || new Date().getFullYear()
@@ -787,13 +815,14 @@ window.Insight = (function () {
     const isCurrent = now.getFullYear() === y && (now.getMonth() + 1) === m
     const daysInMonth = new Date(y, m, 0).getDate()
     const elapsed = isCurrent ? now.getDate() : daysInMonth
-    const totalCents = rows.reduce((s, t) => s + F.toCents(t.amount), 0)
+    const toBase = baseAmountReader()
+    const totalCents = rows.reduce((s, t) => s + toBase(t), 0)
     const catName = id => (id ? S.categoryName(id) : '未分类')
 
     /* 1) 固定 / 订阅支出（按周期折算到每月） */
     const perMonth = { daily: 30.4, weekly: 4.33, monthly: 1, yearly: 1 / 12 }
-    const fixedList = (rules || []).filter(r => r.active !== false && r.txn_type !== 'income').map(r => {
-      const per = Math.round(F.toCents(r.amount) * (perMonth[r.freq] || 1))
+    const fixedList = (rules || []).filter(r => r.active !== false && r.txn_type === 'expense').map(r => {
+      const per = Math.round(toBase(r) * (perMonth[r.freq] || 1))
       return { name: r.note || catName(r.category_id), per: per }
     }).filter(x => x.per > 0).sort((a, b) => b.per - a.per)
     const fixedCents = fixedList.reduce((s, x) => s + x.per, 0)
@@ -802,11 +831,11 @@ window.Insight = (function () {
     const SMALL_CAP = 5000
     const smallMap = {}
     rows.forEach(t => {
-      if (F.toCents(t.amount) > SMALL_CAP) return
+      if (toBase(t) > SMALL_CAP) return
       const k = t.category_id || 0
       if (!smallMap[k]) smallMap[k] = { n: 0, sum: 0 }
       smallMap[k].n++
-      smallMap[k].sum += F.toCents(t.amount)
+      smallMap[k].sum += toBase(t)
     })
     const smallList = Object.keys(smallMap)
       .map(k => ({ id: Number(k), n: smallMap[k].n, sum: smallMap[k].sum }))
@@ -815,13 +844,13 @@ window.Insight = (function () {
       .slice(0, 4)
 
     /* 3) 大额支出 Top 5 */
-    const bigList = rows.slice().sort((a, b) => F.toCents(b.amount) - F.toCents(a.amount)).slice(0, 5)
+    const bigList = rows.slice().sort((a, b) => toBase(b) - toBase(a)).slice(0, 5)
 
     /* 4) 环比异常：本月 ≥ ¥200 且（上月为 0 或增长 ≥ 50%） */
     const curByCat = {}
     const prevByCat = {}
-    rows.forEach(t => { const k = t.category_id || 0; curByCat[k] = (curByCat[k] || 0) + F.toCents(t.amount) })
-    prevRows.forEach(t => { const k = t.category_id || 0; prevByCat[k] = (prevByCat[k] || 0) + F.toCents(t.amount) })
+    rows.forEach(t => { const k = t.category_id || 0; curByCat[k] = (curByCat[k] || 0) + toBase(t) })
+    prevRows.forEach(t => { const k = t.category_id || 0; prevByCat[k] = (prevByCat[k] || 0) + toBase(t) })
     const spikes = Object.keys(curByCat).map(k => {
       const c = curByCat[k]
       const p = prevByCat[k] || 0
@@ -840,28 +869,28 @@ window.Insight = (function () {
       '<span class="tiny muted">' + elapsed + ' 天</span></div>' +
       '<div class="row" style="gap:8px">' +
       '<div style="flex:1;min-width:0"><div class="small muted">总支出</div>' +
-      '<div class="num" style="font-size:19px;font-weight:700">¥' + F.yuan(totalCents) + '</div></div>' +
+      '<div class="num" style="font-size:19px;font-weight:700">' + sym + F.yuan(totalCents) + '</div></div>' +
       '<div style="flex:1;min-width:0"><div class="small muted">笔数</div>' +
       '<div class="num" style="font-size:19px;font-weight:700">' + rows.length + '</div></div>' +
       '<div style="flex:1;min-width:0"><div class="small muted">日均</div>' +
-      '<div class="num" style="font-size:19px;font-weight:700">¥' + F.yuan(Math.round(totalCents / Math.max(elapsed, 1))) + '</div></div>' +
+      '<div class="num" style="font-size:19px;font-weight:700">' + sym + F.yuan(Math.round(totalCents / Math.max(elapsed, 1))) + '</div></div>' +
       '</div></div>')
 
     if (fixedList.length) {
       const pct = Math.round(fixedCents / totalCents * 100)
       cards.push('<div class="card"><div class="between" style="margin-bottom:6px"><b>固定 / 周期支出</b>' +
-        '<span class="tiny muted">每月约 ¥' + F.yuan(fixedCents) + ' · 占支出 ' + pct + '%</span></div>' +
+        '<span class="tiny muted">每月约 ' + sym + F.yuan(fixedCents) + ' · 占支出 ' + pct + '%</span></div>' +
         fixedList.slice(0, 6).map(x => '<div class="kv"><span class="ellipsis">' + esc(x.name) + '</span>' +
-          '<b class="num">¥' + F.yuan(x.per) + '/月</b></div>').join('') +
+          '<b class="num">' + sym + F.yuan(x.per) + '/月</b></div>').join('') +
         (fixedList.length > 6 ? '<div class="tiny muted">还有 ' + (fixedList.length - 6) + ' 项…</div>' : '') +
         '<div class="small muted" style="margin-top:8px">这些是不记账也会自动扣的钱，先看清总额再决定留哪些。</div></div>')
     }
 
     if (smallList.length) {
       cards.push('<div class="card"><div class="between" style="margin-bottom:6px"><b>高频小额聚集区</b>' +
-        '<span class="tiny muted">单笔 ≤ ¥50 且 ≥ 5 次</span></div>' +
+        '<span class="tiny muted">单笔 ≤ ' + sym + '50 且 ≥ 5 次</span></div>' +
         smallList.map(x => '<div class="kv"><span class="ellipsis">' + esc(catName(x.id)) + ' · ' + x.n + ' 笔</span>' +
-          '<b class="num">¥' + F.yuan(x.sum) + '</b></div>').join('') +
+          '<b class="num">' + sym + F.yuan(x.sum) + '</b></div>').join('') +
         '<div class="small muted" style="margin-top:8px">单笔不痛，累计最痛——这是最容易无感流失的钱。</div></div>')
     }
 
@@ -870,7 +899,7 @@ window.Insight = (function () {
         '<span class="tiny muted">本月</span></div>' +
         bigList.map(t => '<div class="kv"><span class="ellipsis">' + esc(t.note || catName(t.category_id)) +
           ' <span class="tiny muted">' + esc(F.isoDay(t.occurred_at).slice(5)) + '</span></span>' +
-          '<b class="num">¥' + F.yuan(F.toCents(t.amount)) + '</b></div>').join('') + '</div>')
+          '<b class="num">' + sym + F.yuan(toBase(t)) + '</b></div>').join('') + '</div>')
     }
 
     if (spikes.length) {
@@ -878,24 +907,24 @@ window.Insight = (function () {
         '<span class="tiny muted">对比上月</span></div>' +
         spikes.map(x => '<div class="kv"><span class="ellipsis">' + esc(catName(x.id)) + '</span>' +
           '<b class="num">' + (x.prev === 0
-            ? '新增 ¥' + F.yuan(x.cur)
-            : F.money(x.prev) + ' → ¥' + F.yuan(x.cur) + '（+' + x.growth + '%）') + '</b></div>').join('') +
+            ? '新增 ' + sym + F.yuan(x.cur)
+            : money(x.prev) + ' → ' + sym + F.yuan(x.cur) + '（+' + x.growth + '%）') + '</b></div>').join('') +
         '<div class="small muted" style="margin-top:8px">这些分类比上个月明显变多了，值得回头看一眼是不是必要开销。</div></div>')
     }
 
     /* 结论 */
     const notes = []
     if (fixedCents > 0) {
-      notes.push('每月固定支出约 <span class="num">¥' + F.yuan(fixedCents) + '</span>，占本月支出的 ' +
+      notes.push('每月固定支出约 <span class="num">' + sym + F.yuan(fixedCents) + '</span>，占本月支出的 ' +
         Math.round(fixedCents / totalCents * 100) + '%')
     }
     if (smallList.length) {
       const s = smallList[0]
-      notes.push('「' + esc(catName(s.id)) + '」小额共 ' + s.n + ' 笔、<span class="num">¥' + F.yuan(s.sum) +
-        '</span>，平均每笔 <span class="num">¥' + F.yuan(Math.round(s.sum / s.n)) + '</span>')
+      notes.push('「' + esc(catName(s.id)) + '」小额共 ' + s.n + ' 笔、<span class="num">' + sym + F.yuan(s.sum) +
+        '</span>，平均每笔 <span class="num">' + sym + F.yuan(Math.round(s.sum / s.n)) + '</span>')
     }
     if (spikes.length) {
-      notes.push('「' + esc(catName(spikes[0].id)) + '」比上月多花 <span class="num">¥' +
+      notes.push('「' + esc(catName(spikes[0].id)) + '」比上月多花 <span class="num">' + sym +
         F.yuan(spikes[0].cur - spikes[0].prev) + '</span>')
     }
     cards.push('<div class="card"><div style="font-weight:700;margin-bottom:6px">小结</div>' +
@@ -918,14 +947,14 @@ window.Insight = (function () {
       const spec = {
         title: '消费洞察 · ' + y + ' 年 ' + m + ' 月',
         subtitle: '共 ' + rows.length + ' 笔支出' + (isCurrent ? ' · 已过 ' + elapsed + ' 天' : ''),
-        hero: { label: (isCurrent ? '本月' : m + '月') + '总支出', value: F.money(totalCents), note: '日均 ¥' + F.yuan(avg), tone: 'expense' },
+        hero: { label: (isCurrent ? '本月' : m + '月') + '总支出', value: money(totalCents), note: '日均 ' + sym + F.yuan(avg), tone: 'expense' },
         stats: [
-          { k: '总支出', v: F.money(totalCents), note: rows.length + ' 笔', tone: 'expense' },
-          { k: '日均支出', v: F.money(avg), note: '按 ' + elapsed + ' 天', tone: 'text' },
+          { k: '总支出', v: money(totalCents), note: rows.length + ' 笔', tone: 'expense' },
+          { k: '日均支出', v: money(avg), note: '按 ' + elapsed + ' 天', tone: 'text' },
           {
             k: '固定支出占比',
             v: fixedCents > 0 ? Math.round(fixedCents / Math.max(totalCents, 1) * 100) + '%' : '—',
-            note: fixedCents > 0 ? '每月约 ¥' + F.yuan(fixedCents) : '没有周期记账',
+            note: fixedCents > 0 ? '每月约 ' + sym + F.yuan(fixedCents) : '没有周期记账',
             tone: fixedCents > 0 ? 'warn' : 'sub',
           },
         ],
@@ -933,15 +962,15 @@ window.Insight = (function () {
       }
       if (fixedList.length) {
         spec.sections.push({
-          title: '固定 / 周期支出', note: '每月约 ¥' + F.yuan(fixedCents),
-          bars: fixedList.slice(0, 6).map(x => ({ name: x.name, value: x.per, text: F.money(x.per) + '/月', tone: 'brand' })),
+          title: '固定 / 周期支出', note: '每月约 ' + sym + F.yuan(fixedCents),
+          bars: fixedList.slice(0, 6).map(x => ({ name: x.name, value: x.per, text: money(x.per) + '/月', tone: 'brand' })),
         })
       }
       if (smallList.length) {
         spec.sections.push({
-          title: '高频小额聚集区', note: '单笔 ≤ ¥50 且 ≥ 5 次',
+          title: '高频小额聚集区', note: '单笔 ≤ ' + sym + '50 且 ≥ 5 次',
           rows: smallList.map(x => ({
-            k: catName(x.id), v: F.money(x.sum), note: x.n + ' 笔 · 均 ¥' + F.yuan(Math.round(x.sum / x.n)), tone: 'text',
+            k: catName(x.id), v: money(x.sum), note: x.n + ' 笔 · 均 ' + sym + F.yuan(Math.round(x.sum / x.n)), tone: 'text',
           })),
         })
       }
@@ -950,7 +979,7 @@ window.Insight = (function () {
           title: '大额支出 Top 5', note: (isCurrent ? '本月' : m + '月'),
           rows: bigList.map(t => ({
             k: t.note || catName(t.category_id),
-            v: F.money(F.toCents(t.amount)),
+            v: money(toBase(t)),
             note: F.isoDay(t.occurred_at).slice(5) + ' · ' + catName(t.category_id),
             tone: 'expense',
           })),
@@ -961,8 +990,8 @@ window.Insight = (function () {
           title: '环比异常', note: '对比上月',
           rows: spikes.map(x => ({
             k: catName(x.id),
-            v: x.prev === 0 ? '新增 ¥' + F.yuan(x.cur) : F.money(x.cur),
-            note: x.prev === 0 ? '上月没有这笔' : '上月 ¥' + F.yuan(x.prev) + '（+' + x.growth + '%）',
+            v: x.prev === 0 ? '新增 ' + sym + F.yuan(x.cur) : money(x.cur),
+            note: x.prev === 0 ? '上月没有这笔' : '上月 ' + sym + F.yuan(x.prev) + '（+' + x.growth + '%）',
             tone: 'warn',
           })),
         })
@@ -1330,3 +1359,4 @@ window.Insight = (function () {
     buildReportImage, showReportImage, exportYearImage,
   }
 })()
+
