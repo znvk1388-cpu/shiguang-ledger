@@ -310,12 +310,14 @@
       sel('account', '账户列', '', true) +
       sel('toAccount', '转入账户列', '转账时必填', true) +
       sel('order', '交易单号列', '用于去重', true) +
-      '<div class="err" id="cmErr"></div>' +
+      '<div class="err" id="cmErr" role="alert"></div><div id="cmDetails"></div>' +
       '<button class="btn block" id="cmGo">按这个映射导入</button>'
     )
     document.getElementById('cmClose').addEventListener('click', U().closeSheet)
     document.getElementById('cmGo').addEventListener('click', () => {
       const err = document.getElementById('cmErr')
+      const details = document.getElementById('cmDetails')
+      details.innerHTML = ''
       const map = { hi: info.hi }
       document.querySelectorAll('#sheet [data-cm]').forEach(s => { map[s.getAttribute('data-cm')] = Number(s.value) })
       if (!(map.date >= 0) || !(map.amount >= 0)) { err.textContent = '日期和金额是必填的'; return }
@@ -324,6 +326,7 @@
       try { parsed = parseCsvText(text, map) } catch (e) { err.textContent = '解析失败：' + (e.message || ''); return }
       if (!parsed.rows.length) {
         err.textContent = '这个映射没解析出有效账目：' + Object.keys(parsed.report.reasons).map(k => k + ' ' + parsed.report.reasons[k] + ' 条').join('；')
+        details.innerHTML = skippedDetails(parsed.report)
         return
       }
       try { const m = csvMaps(); m[headerSig(info.head)] = map; localStorage.setItem(CSVMAP_KEY, JSON.stringify(m)) } catch (e) { /* 忽略 */ }
@@ -338,7 +341,8 @@
     const opts = options || {}
     const mode = S().mode
     const bookId = S().currentBookId()
-    const active = () => S().mode === mode && S().currentBookId() === bookId && (!opts.isActive || opts.isActive())
+    const owner = importIdentity()
+    const active = () => S().mode === mode && S().currentBookId() === bookId && importIdentity() === owner && (!opts.isActive || opts.isActive())
     /* 这批新落库的账目 id：导入完成后登记进「待确认」队列，
        让用户能像 Copilot 的 Transactions to review 那样过一眼。 */
     const newIds = []
@@ -412,8 +416,8 @@
         throw failure
       } finally { state.promise = null }
     }
-    if (newIds.length && window.Lazy) {
-      try { await window.Lazy.need('review').then(m => m && m.add(newIds)) } catch (e) { /* 忽略 */ }
+    if (newIds.length && window.Lazy && owner && active()) {
+      try { await window.Lazy.need('review').then(m => { if (m && active()) m.add(newIds) }) } catch (e) { /* 忽略 */ }
     }
     return summary()
   }
@@ -800,6 +804,26 @@
   }
 
   /* ---------- 导入入口：选文件 → 解析 → 预览 ---------- */
+  function skippedDetails(report) {
+    const esc = F().escapeHtml
+    const rows = (report && report.skippedRows) || []
+    if (!rows.length) return '<p class="small muted">文件中没有可解析的数据行，请检查表头和内容。</p>'
+    return '<div class="card small"><b>跳过的记录</b>' +
+      rows.slice(0, 50).map(item => '<div>第 ' + esc(String(item.record)) + ' 条：' + esc(item.reason) + '</div>').join('') +
+      (rows.length > 50 ? '<div>仅显示前 50 条，请按原因检查原文件。</div>' : '') + '</div>'
+  }
+
+  function showEmptyImport(report, fileName) {
+    const esc = F().escapeHtml
+    const reasons = Object.keys(report.reasons || {}).map(k => esc(k) + ' ' + report.reasons[k] + ' 条').join('；')
+    U().openSheet('<div class="sheet-head"><span class="sheet-title">没有可导入的账目</span><button id="emptyImportClose" class="btn sm line">关闭</button></div>' +
+      '<p class="small">' + esc(fileName || '账单文件') + ' 中没有有效账目，未写入任何数据。</p>' +
+      (reasons ? '<p class="small muted">' + reasons + '</p>' : '') + skippedDetails(report) +
+      '<button class="btn block" id="emptyImportAgain">选择其他账单</button>')
+    document.getElementById('emptyImportClose').addEventListener('click', U().closeSheet)
+    document.getElementById('emptyImportAgain').addEventListener('click', () => { U().closeSheet(); importCsv() })
+  }
+
   function importCsv() {
     const input = document.createElement('input')
     input.type = 'file'
@@ -821,7 +845,7 @@
         } catch (e) { saved = null }
         const parsed = parseCsvText(text, saved)
         if (!parsed.rows.length) {
-          U().toast('没有有效账目；' + Object.keys(parsed.report.reasons).map(reason => reason + ' ' + parsed.report.reasons[reason] + ' 条').join('；'))
+          showEmptyImport(parsed.report, file.name)
           return
         }
         await openImportPreview(parsed, file.name)

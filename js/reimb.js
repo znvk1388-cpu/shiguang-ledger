@@ -7,7 +7,7 @@
  * 数据边界（项目硬约束：不能改表结构）：
  *   - 账目表只保留原有的 reimbursable 布尔位（「这笔要报销」）
  *   - 三态（待报销 / 部分报销 / 已报销）、预计金额、已收金额、核销时间
- *     全部写本机 localStorage 的 `ledger10_reimb` 覆盖层
+ *     按账号或游客账本分别写入本机 localStorage 覆盖层；旧版无主数据保留，不自动认领
  *   - 覆盖层丢失（换设备 / 清缓存）时自动退回「待报销」，不会凭空多钱
  *
  * 口径：核销只改状态，不写任何新账目 —— 这样月支出 / 收入 / 净资产都不变，
@@ -17,15 +17,25 @@
   'use strict'
   const F = window.Fmt
   const S = window.DB
-  const KEY = 'ledger10_reimb'
+  function key() {
+    const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
+    if (!id) throw new Error('无法确认当前身份，请重新打开报销台账')
+    return 'ledger10_reimb_v2:' + encodeURIComponent(JSON.stringify([S.mode, String(id)]))
+  }
 
   const STATUS_LABEL = { pending: '待报销', partial: '部分报销', done: '已报销' }
 
   function all() {
-    try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {} } catch (e) { return {} }
+    const k = key()
+    try {
+      const value = JSON.parse(localStorage.getItem(k) || '{}')
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid')
+      return value
+    } catch (e) { throw new Error('读取报销进度失败，请检查本机存储') }
   }
   function saveAll(m) {
-    try { localStorage.setItem(KEY, JSON.stringify(m)) } catch (e) { /* 隐私模式忽略 */ }
+    const k = key()
+    try { localStorage.setItem(k, JSON.stringify(m)) } catch (e) { throw new Error('保存失败，请检查本机存储空间和权限') }
   }
   function get(id) { return all()[String(id)] || null }
 
@@ -112,8 +122,35 @@
       '</div></div>'
   }
 
+  function legacyHtml() {
+    let raw
+    try { raw = localStorage.getItem('ledger10_reimb') } catch (e) { return '' }
+    if (!raw) return ''
+    const intro = '<div class="card small"><b>旧版报销记录</b><br>旧数据没有记录所属账号或账本，未自动套用。请在本机逐笔核对；下方仅供查看，旧数据仍然保留。'
+    try {
+      const data = JSON.parse(raw)
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid')
+      const rows = Object.entries(data).map(([id, r]) => {
+        r = r && typeof r === 'object' && !Array.isArray(r) ? r : {}
+        const amount = value => Number.isSafeInteger(value) && value >= 0 ? '¥' + F.yuan(value) : '未记录'
+        const status = STATUS_LABEL[r.status] || '状态未知'
+        return '<div class="list-item"><div class="grow">账目 ID：' + F.escapeHtml(id) + '<br>' +
+          F.escapeHtml(status) + ' · 已收 ' + amount(r.received) + ' · 预计 ' + amount(r.expect) +
+          (typeof r.at === 'string' ? '<br>记录时间：' + F.escapeHtml(r.at) : '') + '</div></div>'
+      }).join('')
+      return intro + '<details><summary>查看旧版明细</summary>' + (rows || '没有旧记录') + '</details></div>'
+    } catch (e) { return intro + '<br>旧数据无法解析，请保留本机数据并联系技术支持。</div>' }
+  }
+
   async function openPanel() {
-    const box = await summary()
+    let box, owner
+    try { owner = key(); box = await summary() } catch (e) { window.UI.toast(e.message || '读取报销进度失败'); return }
+    const sameOwner = () => {
+      try { if (key() === owner) return true } catch (e) { /* 身份不可用 */ }
+      window.UI.toast('账号或游客账本已切换，请重新打开报销台账')
+      return false
+    }
+    if (!sameOwner()) return
     const body = box.items.length
       ? box.items.map(rowHtml).join('')
       : '<div class="empty" style="padding:26px 0"><div class="big">' + ic('receipt') + '</div>没有待报销的账目' +
@@ -121,6 +158,7 @@
     window.UI.openSheet(
       '<div class="sheet-head"><span class="sheet-title">报销台账</span>' +
       '<button id="rbClose" class="btn sm line">关闭</button></div>' +
+      legacyHtml() +
       '<div class="card reimb-sum">' +
       '<div class="between"><span class="small muted">待收合计</span>' +
       '<span class="small muted">' + box.pendingCount + ' 笔待收 · ' + box.doneCount + ' 笔已收</span></div>' +
@@ -131,28 +169,33 @@
     )
     document.getElementById('rbClose').onclick = () => window.UI.closeSheet()
     document.querySelectorAll('[data-reimb-done]').forEach(b => {
-      b.onclick = () => { set(Number(b.getAttribute('data-reimb-done')), { status: 'done', received: null }); reopen() }
+      b.onclick = () => { if (!sameOwner()) return; try { set(Number(b.getAttribute('data-reimb-done')), { status: 'done', received: null }); reopen() } catch (e) { window.UI.toast(e.message) } }
     })
     document.querySelectorAll('[data-reimb-undo]').forEach(b => {
-      b.onclick = () => { set(Number(b.getAttribute('data-reimb-undo')), { status: 'pending', received: 0 }); reopen() }
+      b.onclick = () => { if (!sameOwner()) return; try { set(Number(b.getAttribute('data-reimb-undo')), { status: 'pending', received: 0 }); reopen() } catch (e) { window.UI.toast(e.message) } }
     })
     document.querySelectorAll('[data-reimb-part]').forEach(b => {
       b.onclick = () => {
+        if (!sameOwner()) return
         const id = Number(b.getAttribute('data-reimb-part'))
         const item = box.items.find(x => x.t.id === id)
         const max = item ? F.yuan(F.toCents(item.t.amount)) : ''
         const v = prompt('这次收到多少（元）？剩余部分仍显示为待报销。\n本笔金额：¥' + max, '')
         if (v == null) return
+        if (!sameOwner()) return
         const yuan = Number(String(v).trim())
         const cents = F.toCents(yuan)
         if (!Number.isSafeInteger(cents) || cents <= 0) { window.UI.toast('请输入有效且大于 0 的金额'); return }
         const total = item ? F.toCents(item.t.amount) : 0
         if (!(total > 0)) return
         /* 输入的是本次到账金额，覆盖层保存累计已收；再次打开面板也不能丢掉前次回款。 */
-        const previous = Math.max(0, Number((get(id) || {}).received) || 0)
-        const received = Math.min(total, previous + cents)
-        set(id, { status: received >= total ? 'done' : 'partial', received })
-        reopen()
+        try {
+          const previous = Math.max(0, Number((get(id) || {}).received) || 0)
+          if (cents > total - previous) { window.UI.toast('本次金额超过剩余待收 ¥' + F.yuan(Math.max(0, total - previous))); return }
+          const received = previous + cents
+          set(id, { status: received >= total ? 'done' : 'partial', received })
+          reopen()
+        } catch (e) { window.UI.toast(e.message || '保存失败，请检查本机存储') }
       }
     })
   }
@@ -176,4 +219,5 @@
     get, set, clear, statusOf, outstandingCents, ageDays, list, summary, openPanel, chipsHtml, STATUS_LABEL,
   }
 })()
+
 

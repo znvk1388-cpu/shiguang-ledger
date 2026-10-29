@@ -4,6 +4,60 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { JSDOM } = require('jsdom')
 
+test('import does not add pending IDs to a new identity after lazy loading', async t => {
+  const dom = new JSDOM('<div id="sheet"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window, added = []
+  let release, started
+  const loading = new Promise(resolve => { release = resolve })
+  const entered = new Promise(resolve => { started = resolve })
+  w.DB = { mode: 'guest', state: { sourceId: 'source-a' }, currentBookId: () => 1,
+    allAccounts: () => [], rootCategories: () => [], addTransaction: async () => ({ id: 123 }) }
+  w.Lazy = { need: () => { started(); return loading } }
+  for (const file of ['js/format.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const work = w.LedgerCsv.commitRows([{ type: 'expense', amount: 10, occurred: '2026-10-28', note: 'test' }])
+  await entered
+  w.DB.state.sourceId = 'source-b'
+  release({ add: ids => added.push(...ids) })
+  await work
+  assert.deepEqual(added, [])
+})
+
+test('all invalid rows retain visible diagnostics and allow selecting another file', async t => {
+  const dom = new JSDOM('<div id="sheet"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  let selectors = 0
+  w.HTMLInputElement.prototype.click = function () { selectors++ }
+  w.LedgerCsv.importCsv()
+  const input = w.document.querySelector('input[type=file]')
+  Object.defineProperty(input, 'files', { value: [{ name: '<坏账单>.csv', text: async () => '日期,类型,金额\n错误,支出,12\n2026-10-29,支出,无效' }] })
+  input.dispatchEvent(new w.Event('change'))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.match(w.document.querySelector('#sheet').textContent, /第 2 条.*日期无效/)
+  assert.match(w.document.querySelector('#sheet').textContent, /第 3 条/)
+  assert.equal(w.document.querySelector('#sheet img'), null)
+  w.document.querySelector('#emptyImportAgain').click()
+  assert.equal(selectors, 2)
+})
+
+test('column mapping shows failed row numbers without losing selected mapping', () => {
+  const dom = new JSDOM('<div id="sheet"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  try {
+    const w = dom.window
+    w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+    for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+    w.LedgerCsv.openColumnMap('日期列,金额列\n错误,12', '测试.csv')
+    w.document.querySelector('[data-cm="date"]').value = '0'
+    w.document.querySelector('[data-cm="amount"]').value = '1'
+    w.document.querySelector('#cmGo').click()
+    assert.match(w.document.querySelector('#sheet').textContent, /第 2 条.*日期无效/)
+    assert.equal(w.document.querySelector('[data-cm="date"]').value, '0')
+  } finally { dom.window.close() }
+})
+
 test('same order number within the file is presented for manual review and is not imported by default', async t => {
   const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
   t.after(() => dom.window.close())

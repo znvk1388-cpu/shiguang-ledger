@@ -18,7 +18,10 @@ function harness({ accounts = [], balances = [], rules = [], transactions = [], 
   const buttons = new Map()
   let html = ''
   let promptValue = ''
+  let promptHook = () => {}
   let writes = 0
+  let storageFail = false
+  let message = ''
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { addEventListener() {} })
     return nodes.get(id)
@@ -27,10 +30,10 @@ function harness({ accounts = [], balances = [], rules = [], transactions = [], 
     window: {}, Date: FixedDate,
     localStorage: {
       getItem: key => storage.get(key) || null,
-      setItem: (key, value) => storage.set(key, value),
+      setItem: (key, value) => { if (storageFail && key.startsWith('ledger10_reimb_v2:')) throw Error('quota'); storage.set(key, value) },
       removeItem: key => storage.delete(key),
     },
-    ic: () => '', prompt: () => promptValue, setTimeout: () => {},
+    ic: () => '', prompt: () => { promptHook(); return promptValue }, setTimeout: () => {},
     document: {
       getElementById: node,
       querySelector: node,
@@ -46,6 +49,7 @@ function harness({ accounts = [], balances = [], rules = [], transactions = [], 
     },
   }
   context.window.DB = {
+    mode: 'guest', state: { sourceId: 'library-a' },
     allAccounts: () => accounts,
     accountBalances: async () => balances,
     listRecurring: async () => rules,
@@ -55,7 +59,7 @@ function harness({ accounts = [], balances = [], rules = [], transactions = [], 
     addTransaction: async () => { writes++; throw new Error('Unexpected transaction write') },
   }
   context.window.UI = {
-    openSheet: value => { html = value }, closeSheet() {}, toast() {},
+    openSheet: value => { html = value }, closeSheet() {}, toast(value) { message = value },
   }
   context.window.App = { state: {} }
   context.window.TXN_TYPE_LABEL = { income: '收入', expense: '支出', transfer: '转账' }
@@ -67,6 +71,11 @@ function harness({ accounts = [], balances = [], rules = [], transactions = [], 
     window: context.window,
     html: () => html,
     writes: () => writes,
+    message: () => message,
+    failStorage: () => { storageFail = true },
+    onPrompt: fn => { promptHook = fn },
+    storage,
+    click: (kind, id) => buttons.get(kind + ':' + id).onclick(),
     receive: async (id, amount) => {
       await context.window.Reimb.openPanel()
       promptValue = String(amount)
@@ -117,6 +126,87 @@ test('negative and non-finite reimbursement inputs cannot replace prior receipts
   await h.receive(t.id, 'Infinity')
   assert.equal(h.window.Reimb.get(t.id).received, 3000)
   assert.equal(h.window.Reimb.outstandingCents(t), 7000)
+})
+
+test('reimbursement rejects a receipt exceeding remaining amount without altering prior state', async () => {
+  const t = claim(), h = harness({ transactions: [t] })
+  await h.receive(t.id, 30)
+  await h.receive(t.id, 80)
+  assert.equal(h.window.Reimb.get(t.id).received, 3000)
+  assert.equal(h.window.Reimb.statusOf(t), 'partial')
+  assert.match(h.message(), /超过|最多/)
+})
+
+test('reimbursement reports storage failure without showing successful update', async () => {
+  const t = claim(), h = harness({ transactions: [t] })
+  await h.receive(t.id, 30)
+  h.failStorage()
+  await h.receive(t.id, 20)
+  assert.equal(h.window.Reimb.get(t.id).received, 3000)
+  assert.match(h.message(), /保存失败/)
+})
+
+test('reimbursement overlays are isolated by source and never adopt unowned legacy records', () => {
+  const t = claim(), h = harness({ transactions: [t] }), db = h.window.DB
+  h.storage.set('ledger10_reimb', JSON.stringify({ '1': { status: 'done' } }))
+  assert.equal(h.window.Reimb.statusOf(t), 'pending')
+  h.window.Reimb.set(1, { status: 'partial', received: 3000 })
+  db.state.sourceId = 'library-b'
+  assert.equal(h.window.Reimb.statusOf(t), 'pending')
+  db.mode = 'cloud'; db.state.uid = 'library-a'
+  assert.equal(h.window.Reimb.statusOf(t), 'pending')
+  db.state.uid = ''
+  assert.throws(() => h.window.Reimb.set(1, { status: 'done' }), /身份/)
+  assert.ok(h.storage.has('ledger10_reimb'))
+})
+
+test('corrupt reimbursement storage cannot be silently overwritten', () => {
+  const h = harness(), key = 'ledger10_reimb_v2:' + encodeURIComponent(JSON.stringify(['guest', 'library-a']))
+  h.storage.set(key, '{broken')
+  assert.throws(() => h.window.Reimb.set(1, { status: 'done' }), /读取报销进度失败/)
+  assert.equal(h.storage.get(key), '{broken')
+})
+
+test('legacy reimbursement entries are shown read-only and escaped without adopting them', async () => {
+  const h = harness({ transactions: [claim()] })
+  const raw = JSON.stringify({ '<img>': { status: 'partial', received: 3000, expect: 8000 }, '1': { status: 'done' } })
+  h.storage.set('ledger10_reimb', raw)
+  await h.window.Reimb.openPanel()
+  assert.match(h.html(), /旧版.*报销/)
+  assert.match(h.html(), /&lt;img&gt;/)
+  assert.match(h.html(), /30\.00/)
+  assert.match(h.html(), /80\.00/)
+  assert.equal(h.window.Reimb.statusOf(claim()), 'pending')
+  assert.equal(h.storage.get('ledger10_reimb'), raw)
+})
+
+test('old reimbursement panel cannot write to a newly selected account', async () => {
+  const h = harness({ transactions: [claim()] })
+  await h.window.Reimb.openPanel()
+  h.window.DB.state.sourceId = 'library-b'
+  h.click('done', 1)
+  assert.equal(h.window.Reimb.statusOf(claim()), 'pending')
+  assert.match(h.message(), /切换/)
+})
+
+test('switching identity while entering reimbursement amount prevents writing to new source', async () => {
+  const h = harness({ transactions: [claim()] })
+  h.onPrompt(() => { h.window.DB.state.sourceId = 'library-b' })
+  await h.receive(1, 30)
+  assert.equal(h.window.Reimb.statusOf(claim()), 'pending')
+  assert.match(h.message(), /切换/)
+})
+
+test('switching identity while loading reimbursement list prevents opening stale panel', async () => {
+  const h = harness({ transactions: [claim()] })
+  let resolve
+  h.window.DB.listTransactions = () => new Promise(r => { resolve = r })
+  const pending = h.window.Reimb.openPanel()
+  h.window.DB.state.sourceId = 'library-b'
+  resolve({ rows: [claim()] })
+  await pending
+  assert.equal(h.html(), '')
+  assert.match(h.message(), /切换/)
 })
 
 test('forecast converts foreign cash and recurring amounts to CNY and excludes debt balances', async () => {
@@ -187,3 +277,4 @@ test('recurring transfers affect cash only when crossing the cash-account bounda
   assert.match(h.html(), /转出现金/)
   assert.equal(h.writes(), 0)
 })
+
