@@ -9,7 +9,7 @@
  * 改完的分类写进 `smart.js` 已有的「分类纠正记忆」，下次同类备注自动命中。
  *
  * 数据边界（项目硬约束：不能改表结构、新字段只存 localStorage）：
- *   - 名单只存本机 `ledger10_pending`（账目 id 数组），账目表一个字不动
+ *   - 名单按数据来源分开存本机；旧版无归属名单保留但不自动认领
  *   - 确认 = 从名单划掉；改分类 = updateTransaction(category_id)
  *   - 换设备 / 清缓存后名单为空 → 全部视为已确认，不会凭空多出待办
  */
@@ -26,18 +26,26 @@
   const toast = U.toast
   const ic = window.ic || function () { return '' }
 
-  const KEY = 'ledger10_pending'
+  /* 旧版名单没有所属身份，保留但不自动认领，避免串账号。 */
+  function identity() {
+    const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
+    return id ? 'ledger10_pending_v2:' + encodeURIComponent(JSON.stringify([S.mode, String(id)])) : ''
+  }
 
   function ids() {
     try {
-      const a = JSON.parse(localStorage.getItem(KEY) || '[]')
+      const key = identity()
+      if (!key) return []
+      const a = JSON.parse(localStorage.getItem(key) || '[]')
       return Array.isArray(a) ? a.filter(x => x != null) : []
     } catch (e) { return [] }
   }
   function save(list) {
     try {
-      if (!list || !list.length) localStorage.removeItem(KEY)
-      else localStorage.setItem(KEY, JSON.stringify(list))
+      const key = identity()
+      if (!key) return
+      if (!list || !list.length) localStorage.removeItem(key)
+      else localStorage.setItem(key, JSON.stringify(list))
     } catch (e) { /* 隐私模式忽略 */ }
   }
 
@@ -66,6 +74,8 @@
 
   /* 批量取回待确认账目；已被删掉 / 已不存在的 id 顺手从名单里剔除 */
   async function list() {
+    const owner = identity()
+    if (!owner) return []
     const raw = ids()
     if (!raw.length) return []
     const out = []
@@ -73,9 +83,12 @@
     for (let i = 0; i < raw.length; i += 20) {
       const chunk = raw.slice(i, i + 20)
       const got = await Promise.all(chunk.map(async id => {
-        try { return await S.getTransaction(id) } catch (e) { return null }
+        try { return { value: await S.getTransaction(id) } } catch (e) { return { failed: true } }
       }))
-      got.forEach((t, j) => {
+      if (identity() !== owner) return []
+      got.forEach((result, j) => {
+        if (result.failed) return
+        const t = result.value
         if (t && !t.deleted_at) out.push(t)
         else gone.push(String(chunk[j]))
       })
@@ -89,6 +102,7 @@
   /* ---------- 卡片流 ---------- */
   let cur = []
   let idx = 0
+  let reviewOwner = ''
 
   const CSS = '<style>' +
     '.rv-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}' +
@@ -197,6 +211,7 @@
   }
 
   async function pickCat(cid) {
+    if (!reviewOwner || identity() !== reviewOwner) { toast('账号或账本已切换，请重新打开待确认'); closeSheet(); return }
     const t = cur[idx]
     if (!t || cid == null) return
     const id = Number(cid)
@@ -206,6 +221,7 @@
          而不是悄悄把它覆盖掉（与 smart.js 批量回刷同口径） */
       await S.updateTransaction(t.id, { category_id: id }, t.updated_at)
     } catch (e) { toast(e && e.code === 'CONFLICT' ? '这条刚被其他设备改过，请刷新后重试' : (e.message || '改分类失败，请重试')); return }
+    if (identity() !== reviewOwner) return
     t.category_id = id
     /* 复用 smart.js 的「分类纠正记忆」：下次同类备注直接命中 */
     try {
@@ -218,6 +234,7 @@
   }
 
   function confirmCur() {
+    if (!reviewOwner || identity() !== reviewOwner) { toast('账号或账本已切换，请重新打开待确认'); closeSheet(); return }
     const t = cur[idx]
     if (t) remove(t.id)
     idx++
@@ -225,6 +242,7 @@
   }
 
   async function confirmAll() {
+    if (!reviewOwner || identity() !== reviewOwner) { toast('账号或账本已切换，请重新打开待确认'); closeSheet(); return }
     /* 只确认「已经看过」的（含刚跳过的）：没翻到的卡片留在队列里，
        不能替用户把没看过的一键清空 */
     const seen = cur.slice(0, idx + 1)
@@ -247,13 +265,17 @@
   }
 
   function openReview() {
+    const owner = identity()
+    if (!owner) { toast('无法确认当前身份，请重新进入账本'); return Promise.resolve() }
     /* smart.js 也是懒加载：分类纠正记忆要用到它，先确保到位再出卡片 */
     return window.Lazy.need('smart')
       .then(() => list())
       .then(rows => {
+        if (identity() !== owner) return
+        reviewOwner = owner
         cur = rows
         idx = 0
-        if (!cur.length) { toast('没有待确认的账目'); refreshHome(); return }
+        if (!cur.length) { toast(count() ? '待确认账目暂时无法读取，请检查网络后重试' : '没有待确认的账目'); refreshHome(); return }
         render()
       })
   }
@@ -262,3 +284,4 @@
     add, remove, clear, count, ids, list, openReview,
   }
 })()
+

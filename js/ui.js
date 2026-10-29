@@ -642,16 +642,21 @@ window.UI = (function () {
   /* 导入完一批账单后，它们先待在「待确认」队列里等用户过一眼。
      这里只读本机 localStorage，不查库，所以放在首页渲染路径上也不拖速度。 */
   function pendingBanner() {
-    let n = 0
+    let n = 0, legacyIds = []
     try {
-      const a = JSON.parse(localStorage.getItem('ledger10_pending') || '[]')
+      const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
+      const key = id ? 'ledger10_pending_v2:' + encodeURIComponent(JSON.stringify([S.mode, String(id)])) : ''
+      const a = key ? JSON.parse(localStorage.getItem(key) || '[]') : []
       n = Array.isArray(a) ? a.length : 0
-    } catch (e) { n = 0 }
-    if (!n) return ''
-    return '<div class="remind-banner" id="pendBanner">' +
+      const old = JSON.parse(localStorage.getItem('ledger10_pending') || '[]')
+      legacyIds = Array.isArray(old) ? old.filter(x => typeof x === 'string' || typeof x === 'number') : []
+    } catch (e) { /* 保留旧数据，读取失败时不猜测 */ }
+    const current = n ? '<div class="remind-banner" id="pendBanner">' +
       '<span style="font-size:18px">' + ic('square-check') + '</span>' +
       '<div class="grow"><b>' + n + ' 笔</b>账目等你确认分类</div>' +
-      '<button class="btn sm line" id="pendView">去确认</button></div>'
+      '<button class="btn sm line" id="pendView">去确认</button></div>' : ''
+    return current + (legacyIds.length ? '<div class="remind-banner small"><div>旧版待确认名单已保留，但因无法确定所属账号，未自动显示；请核对原账目。' +
+      '<details><summary>查看旧记录编号（只读）</summary>' + esc(legacyIds.slice(0, 50).join('、')) + (legacyIds.length > 50 ? '……仅显示前 50 条' : '') + '</details></div></div>' : '')
   }
 
   /* 未来 7 天到期的周期账单：固定支出（房租/话费/会员）是高频场景，
@@ -905,6 +910,16 @@ window.UI = (function () {
     savedFilterWrite(items.filter(x => x.name !== name))
   }
 
+  function legacyReimbNotice() {
+    try {
+      const old = JSON.parse(localStorage.getItem('ledger10_reimb') || '{}')
+      if (old && typeof old === 'object' && !Array.isArray(old) && Object.keys(old).length) {
+        return '<div class="small muted" style="margin-top:6px">旧版报销进度未计入，待报销金额可能偏高，请核对。</div>'
+      }
+    } catch (e) { /* 保留无法读取的旧数据 */ }
+    return ''
+  }
+
   function renderFilterBar(st, toggle) {
     const f = st.filters
     const types = [['', '全部'], ['expense', '支出'], ['income', '收入'], ['transfer', '转账']]
@@ -912,9 +927,9 @@ window.UI = (function () {
        顶出这一行的右缘，而这一行是单行横滚，顶出去等于被裁掉。所以金额做紧凑化：
        整元不显示小数；过千用过 k/万，把 chip 宽度封在 ~110px 以内。
        （不能改成换行：多出来的 48px 会把首屏第一条流水顶破 520px 硬线） */
-    const reimbCents = reimbCache.cents
+    const reimbCents = reimbCache.owner === reimbKey() ? reimbCache.cents : 0
     const reimbTxt = reimbCents >= 100000 ? F.compactYuan(reimbCents) : F.yuan(reimbCents).replace(/\.00$/, '')
-    const reimbAmt = reimbCache.count ? ' ¥' + reimbTxt : ''
+    const reimbAmt = reimbCache.owner === reimbKey() && reimbCache.count ? ' ¥' + reimbTxt : ''
     const chips = types.map(([v, label]) =>
       '<button class="chip' + (f.type === v ? ' on' : '') + '" data-ftype="' + v + '">' + label + '</button>').join('') +
       '<button class="chip" id="reimEntry" title="查看待报销的账目">' + ic('receipt') + ' 待报销' + reimbAmt + '</button>'
@@ -962,7 +977,7 @@ window.UI = (function () {
     return '<div class="card filter-bar">' +
       '<div class="row"><input id="kwInput" type="search" aria-label="搜索账单" class="input grow" placeholder="搜索备注 / 分类 / 账户 / 金额" value="' + esc(f.keyword) + '">' +
       filterBtn + (toggle || '') + '</div>' +
-      '<div class="chips scroll mask-fade" style="margin-top:8px">' + chips + '</div>' + catChip + accChips +
+      '<div class="chips scroll mask-fade" style="margin-top:8px">' + chips + '</div>' + legacyReimbNotice() + catChip + accChips +
       '<div class="chips scroll mask-fade' + (st.filterOpen ? '' : ' hidden') + '" style="margin-top:8px">' +
       '<button class="chip" id="homeGallery">' + ic('image') + ' 凭证相册</button>' +
       '<button class="chip" id="homeTag">' + ic('tag') + ' 标签</button>' +
@@ -2232,19 +2247,23 @@ window.UI = (function () {
 
   /* ---------- 报销状态（本机覆盖层） ----------
      账目表只有 reimbursable 一个布尔位，不能加列；三态（待报销 / 部分 / 已收）
-     存 localStorage 的 ledger10_reimb 覆盖层。台账面板见 js/reimb.js（懒加载）。 */
+     按数据来源存本机覆盖层。台账面板见 js/reimb.js（懒加载）。 */
+  function reimbKey() {
+    const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
+    return id ? 'ledger10_reimb_v2:' + encodeURIComponent(JSON.stringify([S.mode, String(id)])) : ''
+  }
   function reimbMap() {
-    try { return JSON.parse(localStorage.getItem('ledger10_reimb') || '{}') || {} } catch (e) { return {} }
+    try { const key = reimbKey(); return key ? JSON.parse(localStorage.getItem(key) || '{}') || {} : {} } catch (e) { return {} }
   }
   function reimbStatusOf(t) {
     const r = reimbMap()[String(t.id)]
     if (r && r.status) return r.status
     return t.reimbursable ? 'pending' : ''
   }
-  function writeReimb(id, status, expectYuan) {
+  function writeReimb(id, status, expectYuan, owner) {
     if (id == null) return
-    let m = {}
-    try { m = JSON.parse(localStorage.getItem('ledger10_reimb') || '{}') || {} } catch (e) { m = {} }
+    if (!owner || owner !== reimbKey()) throw new Error('账号或账本已切换，报销状态未保存')
+    const m = JSON.parse(localStorage.getItem(owner) || '{}') || {}
     const key = String(id)
     if (!status) {
       delete m[key]
@@ -2253,18 +2272,22 @@ window.UI = (function () {
       const cents = F.toCents(Number(String(expectYuan || '').replace(/[^\d.]/g, '')) || 0)
       if (cents > 0) m[key].expect = cents
     }
-    try { localStorage.setItem('ledger10_reimb', JSON.stringify(m)) } catch (e) { /* 忽略 */ }
+    localStorage.setItem(owner, JSON.stringify(m))
     reimbCache.at = 0
   }
   /* 待收合计：明细页筛选条上要显示「待报销 ¥N」，这里做 60 秒缓存，
      避免每次重绘都多打一次云查询 */
-  let reimbCache = { at: 0, cents: 0, count: 0 }
+  let reimbCache = { at: 0, cents: 0, count: 0, owner: '' }
   /* 数据变了要重算「待报销」合计：App.refresh() 里会调它 */
   function invalidateReimb() { reimbCache.at = 0 }
   async function reimbPending() {
-    if (Date.now() - reimbCache.at < 60000) return reimbCache
+    const owner = reimbKey()
+    if (!owner) return { at: 0, cents: 0, count: 0, owner: '' }
+    if (reimbCache.owner === owner && Date.now() - reimbCache.at < 60000) return reimbCache
+    reimbCache = { at: 0, cents: 0, count: 0, owner: owner }
     try {
       const res = await S.listTransactions({ reimbursable: true, limit: 2000, ignoreBook: true })
+      if (owner !== reimbKey()) return { at: 0, cents: 0, count: 0, owner: '' }
       const map = reimbMap()
       let cents = 0
       let count = 0
@@ -2274,8 +2297,8 @@ window.UI = (function () {
         count++
         cents += Math.max(0, F.toCents(t.amount) - Number(r.received || 0))
       })
-      reimbCache = { at: Date.now(), cents: cents, count: count }
-    } catch (e) { reimbCache = { at: Date.now(), cents: 0, count: 0 } }
+      reimbCache = { at: Date.now(), cents: cents, count: count, owner: owner }
+    } catch (e) { if (owner !== reimbKey()) return { at: 0, cents: 0, count: 0, owner: '' }; reimbCache = { at: Date.now(), cents: 0, count: 0, owner: owner } }
     return reimbCache
   }
 
@@ -3131,6 +3154,7 @@ window.UI = (function () {
     if (draft.ordNo && !duplicate) payload.tags = payload.tags.concat('_ord:' + draft.ordNo)
 
     const btn = $('#edSave')
+    const reimbOwner = reimbKey()
     editorSaving = true
     btn.disabled = true
     btn.textContent = '保存中…'
@@ -3182,8 +3206,8 @@ window.UI = (function () {
          所以月支出 / 收入 / 净资产都不变 */
       try {
         const exEl = $('#reimExpect')
-        writeReimb(committedId, draft.type === 'expense' ? draft.reimbStatus : '', exEl ? exEl.value : draft.reimbExpect)
-      } catch (e) { /* 忽略 */ }
+        if (payload.reimbursable || editingId) writeReimb(committedId, draft.type === 'expense' ? draft.reimbStatus : '', exEl ? exEl.value : draft.reimbExpect, reimbOwner)
+      } catch (e) { partialWarning = '账目已保存，但报销状态未保存；请核对本机存储及账号' }
       closeSheet(true)
       if (window.Smart) window.Smart.invalidateNoteCache()
       /* 记录分类使用频次，下次打开记账弹窗时常用分类排到前面 */
@@ -3367,7 +3391,7 @@ window.UI = (function () {
 
   return {
     $, $$, toast, openSheet, closeSheet, lightbox, ic,
-    savedFilterList, savedFilterSave, savedFilterApply, savedFilterDelete,
+    savedFilterList, savedFilterSave, savedFilterApply, savedFilterDelete, pendingBanner, reimbStatusOf, writeReimb, reimbPending, legacyReimbNotice,
     renderOverview, renderHome, renderStats, renderAssets, renderMe, ledgerEmpty,
     openEditor, loadMore, periodRange, periodTitle, openPeriodPicker,
     openBookSheet, openCategoryBudget, openSubscriptionSheet, openReminderSettings,
