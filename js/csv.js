@@ -346,13 +346,24 @@
     /* 这批新落库的账目 id：导入完成后登记进「待确认」队列，
        让用户能像 Copilot 的 Transactions to review 那样过一眼。 */
     const newIds = []
+    let reviewWarning = ''
+    async function registerReview() {
+      if (!newIds.length) return
+      if (!owner || !active() || !window.Lazy) { reviewWarning = '账目已保存，但待确认名单未登记，请在原账本手动核对'; return }
+      try {
+        const m = await window.Lazy.need('review')
+        if (!m || !active()) throw new Error('未能登记')
+        m.add(newIds)
+        newIds.length = 0
+      } catch (e) { reviewWarning = '账目已保存，但待确认名单未登记，请在原账本手动核对' }
+    }
     const summary = () => {
       let ok = 0, pending = 0
       rows.forEach(row => {
         const state = importedRows.get(row)
         if (state && state.done) { ok++; if (state.pending) pending++ }
       })
-      return { ok, pending, remaining: rows.length - ok, stopped: !active() }
+      return { ok, pending, remaining: rows.length - ok, stopped: !active(), reviewWarning }
     }
     for (const r of rows) {
       if (!active()) break
@@ -411,14 +422,13 @@
       try {
         await state.promise
       } catch (error) {
+        await registerReview()
         const failure = new Error(error.message || '保存失败，请重试')
         failure.importResult = summary()
         throw failure
       } finally { state.promise = null }
     }
-    if (newIds.length && window.Lazy && owner && active()) {
-      try { await window.Lazy.need('review').then(m => { if (m && active()) m.add(newIds) }) } catch (e) { /* 忽略 */ }
-    }
+    await registerReview()
     return summary()
   }
 
@@ -456,7 +466,13 @@
     const days = rows.map(r => F().isoDay(r.occurred)).sort()
     const keys = new Set()
     const ords = new Set()
-    if (!days.length) return { keys, ords }
+    const keyMatches = new Map(), orderMatches = new Map()
+    if (!days.length) return { keys, ords, keyMatches, orderMatches }
+    const remember = (map, key, txn) => {
+      if (!map.has(key)) map.set(key, [])
+      const list = map.get(key)
+      if (list.length < 3) list.push(txn)
+    }
     const fromDate = new Date(days[0] + 'T00:00:00')
     const toDate = new Date(days[days.length - 1] + 'T00:00:00')
     toDate.setDate(toDate.getDate() + 1)
@@ -466,10 +482,13 @@
       const res = await S().listTransactions({ from, to, limit: 1000, offset })
       if (!res || !Array.isArray(res.rows)) throw new Error('无法完整读取已有账目，请重试')
       res.rows.forEach(t => {
+        if (t.deleted_at) return
         if (String(t.book_id || S().defaultBookId()) !== String(targetBook)) return
         const ord = orderOf(t)
-        if (ord) ords.add(ord)
-        keys.add(t.txn_type + '|' + F().toCents(t.amount) + '|' + F().isoDay(t.occurred_at) + '|' + (t.note || ''))
+        if (ord) { ords.add(ord); remember(orderMatches, ord, t) }
+        const key = t.txn_type + '|' + F().toCents(t.amount) + '|' + F().isoDay(t.occurred_at) + '|' + (t.note || '')
+        keys.add(key)
+        remember(keyMatches, key, t)
       })
       offset += res.rows.length
       if (Number.isFinite(res.total)) {
@@ -478,7 +497,7 @@
       } else if (res.rows.length < 1000) break
       if (offset >= 200000) throw new Error('待核对账目过多，请缩小账单日期范围后导入')
     }
-    return { keys, ords }
+    return { keys, ords, keyMatches, orderMatches }
   }
 
   /* ---------- 导入预览与分类映射 ---------- */
@@ -508,6 +527,7 @@
     }
     if (!loadingActive()) return
     const esc = F().escapeHtml
+    const displayMoney = value => F().privacy && F().privacy() ? '****' : F().money(F().toCents(value))
     const cnt = { expense: 0, income: 0, transfer: 0 }
     rows.forEach(r => { cnt[r.type] = (cnt[r.type] || 0) + 1 })
 
@@ -524,6 +544,7 @@
       }
       /* 旧记录不保存单号来源，不能确定此前存的是交易号还是商户号。 */
       r.uncertain = !!r.dup
+      r.matchExamples = r.orderNo ? (dupSet.orderMatches.get(r.orderNo) || []) : (dupSet.keyMatches.get(k) || [])
       if (r.dup) dupCount++
     })
 
@@ -586,7 +607,7 @@
         '<div class="grow"><div class="small ellipsis">' + esc(r.note || r.categoryName || '（无备注）') + '</div>' +
         '<div class="tiny muted">' + r.occurred.slice(0, 10) + ' · ' + esc(r.accountName || '—') + ' · ' + esc(r.categoryName || '未分类') + '</div></div>' +
         (r.dup ? '<span class="pill pill-exp">' + (r.uncertain ? (r.fileOrderDuplicate ? '文件内单号重复' : '疑似重复') : '单号重复') + '</span>' : '') +
-        '<span class="num small" style="color:' + color + '">' + sign + F().money(F().toCents(r.amount)) + '</span>' +
+        '<span class="num small" style="color:' + color + '">' + sign + displayMoney(r.amount) + '</span>' +
         '</div>'
     }).join('')
 
@@ -611,10 +632,15 @@
         ? '<div class="card small" style="color:var(--warn)">同文件内有 ' + parsed.report.sameFileDuplicates +
         ' 笔与其他记录的日期、类型、金额、备注相同。请核对原账单；这些记录仍会保留导入。</div>' : '') +
       (dupCount ? '<div class="card"><b>疑似重复：逐笔决定是否导入</b><div class="small muted">无单号的记录按日期、金额和备注推测；单号可能对应不同记录，请核对。</div>' +
-        rows.map((r, i) => r.uncertain ? '<label class="list-item"><input type="checkbox" data-import-uncertain="' + i + '"><span class="grow small">' +
+        rows.map((r, i) => r.uncertain ? '<div><label class="list-item"><input type="checkbox" data-import-uncertain="' + i + '"><span class="grow small">' +
           (r.fileOrderDuplicate ? '文件内单号重复 · ' : '') + esc(F().isoLocal(r.occurred).slice(0, 16).replace('T', ' ')) +
           ' · ' + esc(r.accountName || '未指定账户') + ' · ' + esc(r.note || '无备注') +
-          (r.orderNo ? ' · 单号 ' + esc(r.orderNo) : '') + ' · ' + F().money(F().toCents(r.amount)) + ' · 仍要导入</span></label>' : '').join('') + '</div>' : '') +
+          (r.orderNo ? ' · 单号 ' + esc(r.orderNo) : '') + ' · ' + displayMoney(r.amount) + ' · 仍要导入</span></label>' +
+          (r.matchExamples.length ? '<details class="small" style="padding:0 12px 10px"><summary>查看匹配的已有账目（最多 3 笔）</summary>' +
+            r.matchExamples.map(t => '<div class="small muted">' + esc(String(t.occurred_at || '').slice(0, 16).replace('T', ' ')) +
+              ' · ' + esc(({ expense: '支出', income: '收入', transfer: '转账' })[t.txn_type] || '未知类型') +
+              ' · ' + esc(S().accountName ? (S().accountName(t.account_id) || '未指定账户') : '未指定账户') +
+              ' · ' + esc(t.note || '无备注') + ' · ' + displayMoney(t.amount) + '</div>').join('') + '</details>' : '') + '</div>' : '').join('') + '</div>' : '') +
       '<p class="small muted">目标账本：<b>' + esc(S().bookName(scopeBook) || '默认账本') + '</b>。CSV 中的账本列仅供参考，本次全部写入此账本。</p>' +
       '<p class="small muted">开始导入后，本次映射和选择将锁定；若需修改，请关闭后重新导入并核对。关闭面板会停止后续记录，正在保存的一笔可能完成；本面板重试不会重复写入已成功记录。</p>' +
       (autoMapped.length
@@ -647,7 +673,12 @@
     const runButton = document.getElementById('impRun'), closeButton = document.getElementById('impClose'), errorBox = document.getElementById('impErr')
     let running = false
     const updateRun = () => {
-      const missing = Array.from(document.querySelectorAll('#sheet [data-account-map]')).some(box => box.value === '__missing__' || (box.hasAttribute('data-account-required') && !box.value))
+      const missing = Array.from(document.querySelectorAll('#sheet [data-account-map]')).some(box => {
+        const name = accountNames[Number(box.getAttribute('data-account-map'))]
+        const selected = rows.filter(r => !r.dup && (r.accountName === name || r.toAccountName === name))
+        return selected.length > 0 && (box.value === '__missing__' ||
+          (!box.value && selected.some(r => r.accountName === name && r.accountNeedsConfirm)))
+      })
       runButton.disabled = rows.length === dupCount || missing
       runButton.textContent = '确认导入 ' + (rows.length - dupCount) + ' 笔'
     }
@@ -673,7 +704,9 @@
         const selectedAccounts = Object.create(null)
         document.querySelectorAll('#sheet [data-account-map]').forEach(sel => {
           const name = accountNames[Number(sel.getAttribute('data-account-map'))]
-          if (sel.value) selectedAccounts[name] = mappedAccount(sel.value)
+          if (sel.value && sel.value !== '__missing__' && rows.some(r => !r.dup && (r.accountName === name || r.toAccountName === name))) {
+            selectedAccounts[name] = mappedAccount(sel.value)
+          }
         })
         rows.forEach(r => {
           r.accountId = selectedAccounts[r.accountName] ?? null
@@ -682,7 +715,9 @@
         if (scopeIdentity) {
           const all = importAccountMaps()
           const remembered = Object.assign(Object.create(null), all[scopeIdentity] || {})
-          accountNames.forEach(name => { delete remembered[name] })
+          accountNames.forEach(name => {
+            if (rows.some(r => !r.dup && (r.accountName === name || r.toAccountName === name))) delete remembered[name]
+          })
           all[scopeIdentity] = Object.assign(remembered, selectedAccounts)
           try { localStorage.setItem(ACCMAP_KEY, JSON.stringify(all)) } catch (e) { /* 映射未保存不影响本次导入 */ }
         }
@@ -724,7 +759,7 @@
         if (!isActive()) return
         const progress = error.importResult || { ok: 0, remaining: rows.filter(r => !r.dup).length }
         errorBox.textContent = '已成功 ' + progress.ok + ' 笔，剩余 ' + progress.remaining +
-          ' 笔未完成：' + (error.message || '请重试') + '。重试只处理未成功记录。'
+          ' 笔未完成：' + (error.message || '请重试') + '。重试只处理未成功记录。' + (progress.reviewWarning ? ' ' + progress.reviewWarning : '')
         runButton.disabled = false
         runButton.textContent = '重试剩余 ' + progress.remaining + ' 笔'
       } finally { running = false }
@@ -759,6 +794,7 @@
       '<div style="font-size:38px">' + ic('check') + '</div>' +
       '<div style="font-weight:700;margin-top:2px">共解析 ' + parsedTotal + ' 笔账单</div></div>' +
       '<div class="row" style="gap:8px">' + stats + '</div>' +
+      (res.reviewWarning ? '<div class="card small">' + esc(res.reviewWarning) + '</div>' : '') +
       (accRows
         ? '<div class="card"><div class="between" style="margin-bottom:6px"><b>按账户分布</b>' +
           '<span class="tiny muted">来源 → 实际入账账户</span></div>' + accRows + '</div>'

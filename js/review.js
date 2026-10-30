@@ -37,16 +37,17 @@
       const key = identity()
       if (!key) return []
       const a = JSON.parse(localStorage.getItem(key) || '[]')
-      return Array.isArray(a) ? a.filter(x => x != null) : []
-    } catch (e) { return [] }
+      if (!Array.isArray(a)) throw new Error('invalid')
+      return a.filter(x => x != null)
+    } catch (e) { throw new Error('读取待确认名单失败，请检查本机存储') }
   }
   function save(list) {
     try {
       const key = identity()
-      if (!key) return
+      if (!key) throw new Error('no identity')
       if (!list || !list.length) localStorage.removeItem(key)
       else localStorage.setItem(key, JSON.stringify(list))
-    } catch (e) { /* 隐私模式忽略 */ }
+    } catch (e) { throw new Error('保存待确认名单失败，请检查本机存储和当前身份') }
   }
 
   /* 导入 / AI 记账落库后登记。重复登记不会翻倍 */
@@ -154,7 +155,7 @@
       (left > 1 ? '<button class="btn sm ghost" id="rvAll">全部确认</button>' : '') + '</div>' +
       '<div class="rv-card" id="rvCard" data-id="' + t.id + '">' +
         '<div class="rv-meta">' + esc(d) + (accName ? ' · ' + esc(accName) : '') + '</div>' +
-        '<div class="rv-amt' + (kind === 'income' ? ' in' : '') + '">' + sign + '¥' + F.yuan(F.toCents(t.amount)) + '</div>' +
+        '<div class="rv-amt' + (kind === 'income' ? ' in' : '') + '">' + sign + '¥' + (F.privacy && F.privacy() ? '****' : F.yuan(F.toCents(t.amount))) + '</div>' +
         '<div class="rv-note">' + esc(t.note || catName) + '</div>' +
         '<div class="rv-catline">' + ic('tag') + ' 分类 <b>' + esc(catName) + '</b></div>' +
         (sug ? '<div class="rv-sug">上次同类记成了「' + esc(sug.name) + '」，点一下就能用</div>' : '') +
@@ -236,7 +237,7 @@
   function confirmCur() {
     if (!reviewOwner || identity() !== reviewOwner) { toast('账号或账本已切换，请重新打开待确认'); closeSheet(); return }
     const t = cur[idx]
-    if (t) remove(t.id)
+    try { if (t) remove(t.id) } catch (e) { toast(e.message); return }
     idx++
     render()
   }
@@ -247,8 +248,13 @@
        不能替用户把没看过的一键清空 */
     const seen = cur.slice(0, idx + 1)
     if (!seen.length) { done(); return }
-    seen.forEach(t => remove(t.id))
-    const left = ids().length
+    let left
+    try {
+      const seenIds = new Set(seen.map(t => String(t.id)))
+      const remaining = ids().filter(id => !seenIds.has(String(id)))
+      save(remaining)
+      left = remaining.length
+    } catch (e) { toast(e.message); return }
     closeSheet()
     toast('已确认 ' + seen.length + ' 笔' + (left ? '，还剩 ' + left + ' 笔待确认' : ''))
     refreshHome()
@@ -277,7 +283,7 @@
         idx = 0
         if (!cur.length) { toast(count() ? '待确认账目暂时无法读取，请检查网络后重试' : '没有待确认的账目'); refreshHome(); return }
         render()
-      })
+      }).catch(e => { toast(e.message || '读取待确认名单失败') })
   }
 
   window.Review = {

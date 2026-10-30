@@ -59,6 +59,14 @@ test('首页待确认提示只读取当前身份，旧名单被保留且不会�
   assert.equal(h.values.get('ledger10_pending'), '[99]')
 })
 
+test('待确认数据损坏时首页提示用户核对', () => {
+  const h = harness()
+  const key = 'ledger10_pending_v2:' + encodeURIComponent(JSON.stringify(['guest', 'guest-a']))
+  h.values.set(key, '{bad json')
+  assert.match(h.ui.pendingBanner(), /待确认.*读取失败/)
+  assert.equal(h.values.get(key), '{bad json')
+})
+
 test('报销覆盖层和异步缓存均按当前数据来源隔离', async () => {
   const h = harness()
   h.ui.writeReimb(1, 'done', '', 'ledger10_reimb_v2:' + encodeURIComponent(JSON.stringify(['guest', 'guest-a'])))

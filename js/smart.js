@@ -325,17 +325,27 @@ window.Smart = (function () {
      用户往往先记了账才想到「以后这类都归到 X」。 */
   async function openRuleApply(rule) {
     const esc = F.escapeHtml
+    const identity = () => {
+      const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
+      return id ? JSON.stringify([S.mode, String(id), S.currentBookId()]) : ''
+    }
+    const scope = identity()
+    if (!scope) { U().toast('无法确认当前账号或账本，请重新打开'); return }
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">应用到已有账目</span><button id="raClose" class="btn sm line">关闭</button></div>' +
       '<div class="card" style="box-shadow:none;background:var(--brand-soft)"><div class="small">当 ' + ruleCondText(rule) + '</div>' +
       '<div class="small" style="color:var(--brand);margin-top:2px">' + (ruleActsText(rule).join(' · ') || '未设置动作') + '</div></div>' +
       '<p class="small muted">正在检查最近 1000 笔账目…</p><div id="raBody"></div>')
     document.getElementById('raClose').addEventListener('click', U().closeSheet)
+    const originalBody = document.getElementById('raBody')
+    const active = () => identity() === scope && document.getElementById('raBody') === originalBody &&
+      originalBody && !originalBody.closest('[aria-hidden="true"]')
     let res
     try { res = await S.listTransactions({ limit: 1000 }) } catch (e) {
-      document.getElementById('raBody').innerHTML = '<div class="err">读取账目失败：' + esc(e.message || '请重试') + '</div>'
+      if (active()) originalBody.innerHTML = '<div class="err">读取账目失败：' + esc(e.message || '请重试') + '</div>'
       return
     }
+    if (!active()) { U().toast('账号、账本或面板已切换，请重新打开核对'); return }
     const hits = []
     ;(res.rows || []).forEach(t => {
       if (!matchOne(rule, matchCtx(t))) return
@@ -363,20 +373,24 @@ window.Smart = (function () {
     const btn = document.getElementById('raRun')
     btn.addEventListener('click', async () => {
       if (btn.disabled) return
+      if (!active()) { U().toast('账号、账本或面板已切换，请重新打开核对'); return }
       btn.disabled = true
-      let ok = 0, conflict = 0, fail = 0
+      let ok = 0, conflict = 0, uncertain = false, stopped = false
       for (let i = 0; i < hits.length; i++) {
+        if (!active()) { stopped = true; break }
         btn.textContent = '应用中 ' + (i + 1) + ' / ' + hits.length
         try {
           await S.updateTransaction(hits[i].t.id, hits[i].patch, hits[i].t.updated_at)
+          if (!active()) { uncertain = true; stopped = true; break }
           ok++
         } catch (e) {
           if (e && e.code === 'CONFLICT') conflict++
-          else fail++
+          else { uncertain = true; break }
         }
       }
-      U().toast('已更新 ' + ok + ' 笔' + (conflict ? '，' + conflict + ' 笔被其他设备改过已跳过' : '') + (fail ? '，' + fail + ' 笔失败' : ''))
-      U().closeSheet()
+      U().toast('已确认更新 ' + ok + ' 笔' + (conflict ? '，' + conflict + ' 笔被其他设备改过已跳过' : '') +
+        (uncertain ? '；有一笔结果待核对，请检查账目与同步状态，未继续处理后续记录' : stopped ? '；账号、账本或面板已切换，请核对后续记录' : ''))
+      if (active()) U().closeSheet()
       if (window.App && window.App.refresh) window.App.refresh()
     })
   }
@@ -623,3 +637,4 @@ window.Smart = (function () {
     aiParse, openAiSheet,
   }
 })()
+

@@ -14,7 +14,7 @@ async function harness(setBudget) {
   }
   const context = { window: {}, document: { querySelector: node, querySelectorAll: () => [] },
     localStorage: { getItem: () => null, setItem() {} }, setTimeout() {} }
-  context.window.DB = { categorySummary: async () => [], rootCategories: () => [{ id: 1, name: '餐饮', icon: '' }, { id: 2, name: '交通', icon: '' }],
+  context.window.DB = { mode: 'guest', state: { sourceId: 'test' }, currentBookId: () => 1, categorySummary: async () => [], rootCategories: () => [{ id: 1, name: '餐饮', icon: '' }, { id: 2, name: '交通', icon: '' }],
     budgetOf: (_, id) => id == null ? 1000 : id === 1 ? 500 : 100, setBudget }
   context.window.UI = { openSheet() {}, closeSheet() {}, toast() {} }
   context.window.App = { refresh() {} }

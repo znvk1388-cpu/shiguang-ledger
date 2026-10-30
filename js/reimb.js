@@ -17,6 +17,7 @@
   'use strict'
   const F = window.Fmt
   const S = window.DB
+  const shownAmount = cents => F.privacy && F.privacy() ? '****' : F.yuan(cents)
   function key() {
     const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
     if (!id) throw new Error('无法确认当前身份，请重新打开报销台账')
@@ -106,13 +107,13 @@
     const done = x.status === 'done'
     return '<div class="reimb-row' + (done ? ' done' : '') + '" data-rid="' + t.id + '">' +
       '<div class="reimb-main">' +
-      '<div class="reimb-line1"><b class="num">¥' + F.yuan(F.toCents(t.amount)) + '</b>' +
+      '<div class="reimb-line1"><b class="num">¥' + shownAmount(F.toCents(t.amount)) + '</b>' +
       '<span class="reimb-tag ' + x.status + '">' + (STATUS_LABEL[x.status] || '待报销') + '</span></div>' +
       '<div class="reimb-line2 small muted">' + F.humanDay(t.occurred_at) + ' · ' +
       F.escapeHtml((cat && cat.name) || '未分类') + (acc ? ' · ' + F.escapeHtml(acc) : '') +
       (t.note ? ' · ' + F.escapeHtml(t.note) : '') + '</div>' +
       '<div class="reimb-line3 tiny muted">' +
-      (done ? '已收 ¥' + F.yuan(F.toCents(t.amount)) : '已垫付 ' + x.age + ' 天 · 待收 ¥' + F.yuan(x.outstanding)) +
+      (done ? '已收 ¥' + shownAmount(F.toCents(t.amount)) : '已垫付 ' + x.age + ' 天 · 待收 ¥' + shownAmount(x.outstanding)) +
       '</div></div>' +
       '<div class="reimb-acts">' +
       (done
@@ -132,7 +133,7 @@
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid')
       const rows = Object.entries(data).map(([id, r]) => {
         r = r && typeof r === 'object' && !Array.isArray(r) ? r : {}
-        const amount = value => Number.isSafeInteger(value) && value >= 0 ? '¥' + F.yuan(value) : '未记录'
+        const amount = value => Number.isSafeInteger(value) && value >= 0 ? '¥' + shownAmount(value) : '未记录'
         const status = STATUS_LABEL[r.status] || '状态未知'
         return '<div class="list-item"><div class="grow">账目 ID：' + F.escapeHtml(id) + '<br>' +
           F.escapeHtml(status) + ' · 已收 ' + amount(r.received) + ' · 预计 ' + amount(r.expect) +
@@ -162,7 +163,7 @@
       '<div class="card reimb-sum">' +
       '<div class="between"><span class="small muted">待收合计</span>' +
       '<span class="small muted">' + box.pendingCount + ' 笔待收 · ' + box.doneCount + ' 笔已收</span></div>' +
-      '<div class="num" style="font-size:28px;font-weight:800;margin-top:2px">¥' + F.yuan(box.outstanding) + '</div>' +
+      '<div class="num" style="font-size:28px;font-weight:800;margin-top:2px">¥' + shownAmount(box.outstanding) + '</div>' +
       '<div class="tiny muted" style="margin-top:6px">代垫本身已计入当月支出；核销只改状态、不写新账目，' +
       '所以月支出 / 收入 / 净资产都不会变。真正到账的钱请用「转账」记录，不要记成收入。</div>' +
       '</div>' + body
@@ -179,7 +180,7 @@
         if (!sameOwner()) return
         const id = Number(b.getAttribute('data-reimb-part'))
         const item = box.items.find(x => x.t.id === id)
-        const max = item ? F.yuan(F.toCents(item.t.amount)) : ''
+        const max = item ? shownAmount(F.toCents(item.t.amount)) : ''
         const v = prompt('这次收到多少（元）？剩余部分仍显示为待报销。\n本笔金额：¥' + max, '')
         if (v == null) return
         if (!sameOwner()) return
@@ -191,7 +192,7 @@
         /* 输入的是本次到账金额，覆盖层保存累计已收；再次打开面板也不能丢掉前次回款。 */
         try {
           const previous = Math.max(0, Number((get(id) || {}).received) || 0)
-          if (cents > total - previous) { window.UI.toast('本次金额超过剩余待收 ¥' + F.yuan(Math.max(0, total - previous))); return }
+          if (cents > total - previous) { window.UI.toast('本次金额超过剩余待收 ¥' + shownAmount(Math.max(0, total - previous))); return }
           const received = previous + cents
           set(id, { status: received >= total ? 'done' : 'partial', received })
           reopen()

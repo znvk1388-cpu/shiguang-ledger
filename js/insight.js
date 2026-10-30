@@ -6,7 +6,12 @@
    5) 按当前筛选导出 CSV
    全部为只读聚合或基于现有字段的更新，不新增表结构。 */
 window.Insight = (function () {
-  const F = window.Fmt
+  /* 报表包括提示文字、图表标题和导出预览，不能只依赖 .num 的视觉遮罩。 */
+  const baseFmt = window.Fmt
+  const F = Object.create(baseFmt)
+  F.yuan = (...args) => baseFmt.privacy() ? '****' : baseFmt.yuan(...args)
+  F.money = (...args) => baseFmt.privacy() ? '****' : baseFmt.money(...args)
+  F.moneySym = (...args) => baseFmt.privacy() ? '****' : baseFmt.moneySym(...args)
   const S = window.DB
   const U = () => window.UI
   /* 图表模块按需加载（见 js/lazy.js）：它不在首屏渲染路径上，
@@ -57,6 +62,7 @@ window.Insight = (function () {
       '<button class="btn block" id="rpPoster">' + ic('palette') + ' 生成本月账单海报</button>' +
       '<button class="btn line block" id="rpYearImg" style="margin-top:8px">' + ic('upload') + ' 导出年度报告图片</button>' +
       '<button class="btn line block" id="rpCsv" style="margin-top:8px">' + ic('upload') + ' 导出当前筛选明细 CSV</button>' +
+      '<div class="small muted">CSV 文件包含真实金额，请妥善保存。</div>' +
       '<div class="hint">常规报表在本机计算；AI 问账会按提问页说明发送数据。</div>'
     )
     document.getElementById('rpClose').addEventListener('click', U().closeSheet)
@@ -419,6 +425,8 @@ window.Insight = (function () {
       return id ? JSON.stringify([S.mode, String(id), String(accountId)]) : ''
     }
     const scope = identity()
+    const book = S.currentBookId ? S.currentBookId() : null
+    const sameScope = () => scope === identity() && (!S.currentBookId || S.currentBookId() === book)
     const markKey = 'ledger10_reconcile_marks_v1'
     const marks = () => {
       try { const all = JSON.parse(localStorage.getItem(markKey) || '{}'); return all[scope] || {} } catch (e) { return {} }
@@ -456,6 +464,7 @@ window.Insight = (function () {
       return { count: sorted.length, inflow, outflow, html: lines || '<div class="small muted" style="padding:14px">该区间没有流水</div>', rows: sorted }
     }
     let r = await render(defFrom, defTo)
+    if (!sameScope()) { U().toast('账本已变化，请重新打开对账单'); return }
     U().openSheet(
       '<div class="sheet-head"><span class="sheet-title">对账单 · ' + F.escapeHtml(a.name) + '（' + F.escapeHtml(currency) + '）</span><button id="sClose" class="btn sm line">关闭</button></div>' +
       '<div class="row" style="gap:8px;margin-bottom:10px">' +
@@ -469,8 +478,10 @@ window.Insight = (function () {
       '<div class="grow"><div class="small muted">笔数</div><div id="stCount" class="num" style="font-weight:700">' + r.count + '</div></div></div></div>' +
       '<p class="small muted">勾选已核对的流水；标记只保存在此设备，不随云同步或备份。账目内容变化后需重新核对。</p>' +
       (!scope ? '<p class="small muted">当前账本身份不可用，暂不能保存核对标记。</p>' : '') +
+      '<div id="stStatus" class="small muted" role="status" aria-live="polite"></div>' +
+      '<button class="btn line block" id="stRetry" hidden>重试读取</button>' +
       '<div class="card" id="stBody">' + r.html + '</div>' +
-      '<button class="btn line block" id="stCsv">导出对账单 CSV</button>'
+      '<button class="btn line block" id="stCsv">导出对账单 CSV</button><div class="small muted">CSV 文件包含真实金额，请妥善保存。</div>'
     )
     document.getElementById('sClose').addEventListener('click', U().closeSheet)
     const body = document.getElementById('stBody')
@@ -478,7 +489,7 @@ window.Insight = (function () {
       const box = event.target
       if (!box.matches('[data-reconciled]')) return
       const t = r.rows[Number(box.getAttribute('data-reconciled'))]
-      if (!scope || scope !== identity() || !t || t.id == null) {
+      if (!scope || !sameScope() || !t || t.id == null) {
         box.checked = false
         U().toast('账本已变化，请重新打开对账单')
         return
@@ -496,27 +507,47 @@ window.Insight = (function () {
       }
     })
     let reloadSequence = 0
+    const exportButton = document.getElementById('stCsv')
+    const status = document.getElementById('stStatus')
+    const retry = document.getElementById('stRetry')
     const reload = async () => {
       const ticket = ++reloadSequence
       const f = document.getElementById('stFrom').value
       const t = document.getElementById('stTo').value
+      exportButton.disabled = true
+      retry.hidden = true
+      body.innerHTML = ''
+      document.getElementById('stInflow').textContent = '—'
+      document.getElementById('stOutflow').textContent = '—'
+      document.getElementById('stCount').textContent = '—'
+      if (!sameScope()) { status.textContent = '账本已变化，请重新打开对账单'; return }
+      if (!f || !t || f > t) { status.textContent = '请选择有效的日期范围，开始日期不能晚于结束日期'; return }
+      status.textContent = '正在读取所选日期的流水…'
       const end = t ? F.ymdLocal(t) : null
       if (end) end.setDate(end.getDate() + 1)
       try {
         const next = await render(f ? F.iso(F.ymdLocal(f)) : defFrom, end ? F.iso(end) : defTo)
         if (ticket !== reloadSequence || document.getElementById('stBody') !== body) return
+        if (!sameScope()) { status.textContent = '账本已变化，请重新打开对账单'; return }
         r = next
         body.innerHTML = r.html
         document.getElementById('stInflow').textContent = money(r.inflow)
         document.getElementById('stOutflow').textContent = money(r.outflow)
         document.getElementById('stCount').textContent = String(r.count)
+        status.textContent = ''
+        exportButton.disabled = false
       } catch (e) {
-        if (ticket === reloadSequence && document.getElementById('stBody') === body) U().toast('读取对账单失败，请重试')
+        if (ticket === reloadSequence && document.getElementById('stBody') === body) {
+          status.textContent = '读取失败，请检查网络后重试'
+          retry.hidden = false
+        }
       }
     }
+    retry.addEventListener('click', reload)
     document.getElementById('stFrom').addEventListener('change', reload)
     document.getElementById('stTo').addEventListener('change', reload)
     document.getElementById('stCsv').addEventListener('click', () => {
+      if (exportButton.disabled || !sameScope()) { U().toast('请先重新打开或刷新对账单'); return }
       const head = ['日期', '类型', '分类/流向', '账户', '目标账户', '备注', '金额', '币种']
       const lines = [head.join(',')].concat(r.rows.map(t => [
         F.isoLocal(t.occurred_at), window.TXN_TYPE_LABEL[t.txn_type] || t.txn_type,
