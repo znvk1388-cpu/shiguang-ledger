@@ -256,7 +256,7 @@ window.SyncSheet = (function () {
      两端同时改同一条账目时，保存会被 updated_at 乐观锁拦下（见 js/store.js）。
      绝不静默覆盖：把两版摆出来让用户选。放在本模块是因为它只在冲突时用得上，
      不占首屏那 155KB 的 gzip 预算。 */
-  function showConflict(err, id, payload) {
+  function showConflict(err, id, payload, options) {
     const U2 = window.UI
     const S = window.DB
     if (!U2 || !U2.openSheet) return
@@ -273,13 +273,18 @@ window.SyncSheet = (function () {
       '<p class="small">为避免覆盖掉你在另一台设备上的修改，这次保存被拦下了。请选择保留哪一版：</p>' +
       '<div class="card"><b>你的这一版（尚未保存）</b>' + mine + '</div>' +
       '<div class="card"><b>云端当前的版本</b>' + theirs + '</div>' +
+      (options && options.pendingAttachmentNotice ? '<p class="small">' + esc(options.pendingAttachmentNotice) + '</p>' : '') +
       '<button class="btn block" id="cfKeep">用我的版本覆盖云端</button>' +
       '<button class="btn line block" id="cfDrop" style="margin-top:8px">放弃我的修改，用云端版本</button>')
     document.getElementById('cfKeep').addEventListener('click', async () => {
       try {
         /* 不带版本号 = 强制写入；用户已明确选择覆盖 */
         await S.updateTransaction(id, payload)
-        U2.closeSheet(); window.App.refresh(); U2.toast('已用你的版本覆盖云端')
+        U2.closeSheet(); window.App.refresh()
+        if (options && options.pendingAttachmentNotice) {
+          U2.openSheet('<div class="sheet-head"><b class="sheet-title">账目已保存</b><button class="btn sm line" id="cfNoticeClose">关闭</button></div><p>' + esc(options.pendingAttachmentNotice) + '</p>')
+          document.getElementById('cfNoticeClose').addEventListener('click', () => U2.closeSheet())
+        } else U2.toast('已用你的版本覆盖云端')
       } catch (e) { U2.toast('覆盖失败：' + ((e && e.message) || '请重试')) }
     })
     document.getElementById('cfDrop').addEventListener('click', async () => {

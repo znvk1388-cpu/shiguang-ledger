@@ -4,6 +4,108 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { JSDOM } = require('jsdom')
 
+test('account mapping is required only for rows selected for import', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.DB = { mode: 'guest', state: { sourceId: 'a', categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    bookName: () => '日常', rootCategories: () => [], allAccounts: () => [{ id: 7, name: '现金' }], accountName: () => '现金',
+    listTransactions: async () => ({ rows: [{ id: 1, book_id: 1, txn_type: 'expense', amount: 16, occurred_at: '2026-10-28T10:00:00', note: '重复', tags: ['_ord:ABC'] }], total: 1 }) }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const parsed = w.LedgerCsv.parseCsvText('日期,类型,金额,账户,备注,交易单号\n2026-10-28,支出,16,未知方式,重复,ABC\n2026-10-28,支出,20,现金,正常,XYZ')
+  parsed.rows[0].accountNeedsConfirm = true
+  await w.LedgerCsv.openImportPreview(parsed, '测试.csv')
+  const button = w.document.querySelector('#impRun')
+  const unknown = [...w.document.querySelectorAll('[data-account-map]')].find(x => x.parentElement.textContent.includes('未知方式'))
+  assert.ok(unknown)
+  assert.equal(button.disabled, false, '跳过的重复记录不应阻止导入其他记录')
+  const checkbox = w.document.querySelector('[data-import-uncertain]')
+  checkbox.checked = true
+  checkbox.dispatchEvent(new w.Event('change', { bubbles: true }))
+  assert.equal(button.disabled, true, '选择导入未知账户时必须先映射')
+  unknown.value = '7'
+  unknown.dispatchEvent(new w.Event('change', { bubbles: true }))
+  assert.equal(button.disabled, false)
+})
+
+test('duplicate review shows matching existing records for comparison without exposing other books', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.DB = { mode: 'guest', state: { sourceId: 'a', categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    bookName: () => '日常', rootCategories: () => [], allAccounts: () => [], accountName: () => '银行卡',
+    listTransactions: async () => ({ rows: [
+      { id: 1, book_id: 1, txn_type: 'expense', amount: 15, occurred_at: '2026-10-28T10:00:00', note: '<原记录>', tags: ['_ord:ABC'] },
+      { id: 2, book_id: 2, txn_type: 'expense', amount: 15, occurred_at: '2026-10-28T10:00:00', note: '别的账本', tags: ['_ord:ABC'] },
+      { id: 3, book_id: 1, txn_type: 'expense', amount: 15, occurred_at: '2026-10-28T10:00:00', note: '已删除账目', deleted_at: '2026-10-29', tags: ['_ord:ABC'] },
+    ], total: 3 }) }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const parsed = w.LedgerCsv.parseCsvText('日期,类型,金额,账户,备注,交易单号\n2026-10-28 11:00,支出,16,微信,新记录,ABC')
+  await w.LedgerCsv.openImportPreview(parsed, '测试.csv')
+  const sheet = w.document.querySelector('#sheet')
+  assert.match(sheet.textContent, /已有账目/)
+  assert.match(sheet.textContent, /<原记录>/)
+  assert.match(sheet.textContent, /银行卡/)
+  assert.doesNotMatch(sheet.textContent, /别的账本/)
+  assert.doesNotMatch(sheet.textContent, /已删除账目/)
+  assert.equal(sheet.querySelector('原记录'), null)
+  assert.equal(sheet.querySelector('[data-import-uncertain]').checked, false)
+  w.Fmt.privacy = () => true
+  await w.LedgerCsv.openImportPreview(parsed, '测试.csv')
+  assert.match(w.document.querySelector('details.small').textContent, /\*\*\*\*/)
+  assert.doesNotMatch(w.document.querySelector('details.small').textContent, /15\.00/)
+  assert.doesNotMatch(w.document.querySelector('#sheet').textContent, /16\.00/)
+})
+
+test('duplicate candidates are not shown after identity changes during lookup', async t => {
+  const dom = new JSDOM('<div id="sheet" aria-hidden="false"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  let release
+  w.ic = () => ''
+  w.UI = { openSheet: html => { w.document.querySelector('#sheet').innerHTML = html }, closeSheet() {}, toast() {} }
+  w.DB = { mode: 'guest', state: { sourceId: 'a', categories: [] }, currentBookId: () => 1, defaultBookId: () => 1,
+    listTransactions: () => new Promise(resolve => { release = resolve }) }
+  for (const file of ['js/format.js', 'js/vendor/papaparse.min.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const parsed = w.LedgerCsv.parseCsvText('日期,类型,金额,备注,交易单号\n2026-10-28,支出,10,早餐,ABC')
+  const work = w.LedgerCsv.openImportPreview(parsed, '测试.csv')
+  w.DB.state.sourceId = 'b'
+  release({ rows: [{ id: 1, book_id: 1, txn_type: 'expense', amount: 10, occurred_at: '2026-10-28', note: '隐私记录', tags: ['_ord:ABC'] }], total: 1 })
+  await work
+  assert.doesNotMatch(w.document.querySelector('#sheet').textContent, /隐私记录/)
+})
+
+test('import reports review registration failure without claiming the saved transaction failed', async t => {
+  const dom = new JSDOM('', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window
+  w.DB = { mode: 'guest', state: { sourceId: 'a' }, currentBookId: () => 1,
+    allAccounts: () => [], rootCategories: () => [], addTransaction: async () => ({ id: 10 }) }
+  w.Lazy = { need: async () => ({ add() { throw new Error('保存待确认名单失败') } }) }
+  for (const file of ['js/format.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const result = await w.LedgerCsv.commitRows([{ type: 'expense', amount: 10, occurred: '2026-10-28', note: 'test' }])
+  assert.equal(result.ok, 1)
+  assert.match(result.reviewWarning, /待确认/)
+})
+
+test('partial import failure registers the successful rows for review', async t => {
+  const dom = new JSDOM('', { url: 'https://test.local', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  const w = dom.window, added = []
+  let count = 0
+  w.DB = { mode: 'guest', state: { sourceId: 'a' }, currentBookId: () => 1,
+    allAccounts: () => [], rootCategories: () => [], addTransaction: async () => { if (++count === 2) throw Error('写入失败'); return { id: 10 } } }
+  w.Lazy = { need: async () => ({ add(ids) { added.push(...ids) } }) }
+  for (const file of ['js/format.js', 'js/csv.js']) w.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+  const rows = [1, 2].map(() => ({ type: 'expense', amount: 10, occurred: '2026-10-28', note: 'test' }))
+  await assert.rejects(w.LedgerCsv.commitRows(rows), /写入失败/)
+  assert.deepEqual(added, [10])
+})
+
 test('import does not add pending IDs to a new identity after lazy loading', async t => {
   const dom = new JSDOM('<div id="sheet"></div>', { url: 'https://test.local', runScripts: 'outside-only' })
   t.after(() => dom.window.close())

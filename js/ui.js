@@ -643,19 +643,21 @@ window.UI = (function () {
      这里只读本机 localStorage，不查库，所以放在首页渲染路径上也不拖速度。 */
   function pendingBanner() {
     let n = 0, legacyIds = []
+    let readFailed = false
     try {
       const id = S.mode === 'cloud' ? S.state && S.state.uid : S.mode === 'guest' ? S.state && S.state.sourceId : ''
       const key = id ? 'ledger10_pending_v2:' + encodeURIComponent(JSON.stringify([S.mode, String(id)])) : ''
       const a = key ? JSON.parse(localStorage.getItem(key) || '[]') : []
-      n = Array.isArray(a) ? a.length : 0
+      if (!Array.isArray(a)) throw new Error('invalid')
+      n = a.length
       const old = JSON.parse(localStorage.getItem('ledger10_pending') || '[]')
       legacyIds = Array.isArray(old) ? old.filter(x => typeof x === 'string' || typeof x === 'number') : []
-    } catch (e) { /* 保留旧数据，读取失败时不猜测 */ }
+    } catch (e) { readFailed = true }
     const current = n ? '<div class="remind-banner" id="pendBanner">' +
       '<span style="font-size:18px">' + ic('square-check') + '</span>' +
       '<div class="grow"><b>' + n + ' 笔</b>账目等你确认分类</div>' +
       '<button class="btn sm line" id="pendView">去确认</button></div>' : ''
-    return current + (legacyIds.length ? '<div class="remind-banner small"><div>旧版待确认名单已保留，但因无法确定所属账号，未自动显示；请核对原账目。' +
+    return (readFailed ? '<div class="remind-banner small">待确认名单读取失败，请检查本机存储；原数据未删除。</div>' : '') + current + (legacyIds.length ? '<div class="remind-banner small"><div>旧版待确认名单已保留，但因无法确定所属账号，未自动显示；请核对原账目。' +
       '<details><summary>查看旧记录编号（只读）</summary>' + esc(legacyIds.slice(0, 50).join('、')) + (legacyIds.length > 50 ? '……仅显示前 50 条' : '') + '</details></div></div>' : '')
   }
 
@@ -2400,6 +2402,7 @@ window.UI = (function () {
     tags: '',
     newFiles: [],
     keepAtts: [],
+    removeAtts: [],
     freq: '',
     reimbursable: false,
     /* 报销三态（'' / pending / partial / done）与预计报销金额 */
@@ -2472,6 +2475,8 @@ window.UI = (function () {
       : ''
     draft.newFiles = []
     draft.keepAtts = editing ? ((window.App.state.attachments || {})[txn.id] || []).slice() : []
+    draft.removeAtts = []
+    draft.ownerKey = reimbKey()
     draft.freq = ''
     draft.reimbursable = txn ? !!txn.reimbursable : false
     draft.reimbStatus = ''
@@ -2766,7 +2771,7 @@ window.UI = (function () {
       '<button type="button" class="qt" id="voiceBtn" aria-label="语音记账">' + ic('mic') + '</button>' +
       '<button type="button" class="qt" id="edAiBtn" aria-label="AI 记账">' + ic('sparkles') + '</button></div>' +
       catBlock + accBlock +
-      '<div class="field"><label for="noteInput">备注</label><input id="noteInput" class="input" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"></div>' +
+      '<div class="field"><label for="noteInput">备注</label><input id="noteInput" class="input" aria-describedby="noteLimit" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"><div id="noteLimit" class="tiny muted"></div></div>' +
       '<div class="chips scroll" id="noteSug" style="margin:-6px 0 10px"></div>' +
       '<button class="btn sm line block" id="moreToggle" style="margin:12px 0">' +
       (editorMoreOpen ? '收起更多选项 ⌃' : '更多选项：时间 · 标签 · 周期 · 报销 · 凭证图片 ⌄') + '</button>' +
@@ -2884,12 +2889,13 @@ window.UI = (function () {
       })
     })
     $$('[data-remove]').forEach(b => {
-      b.addEventListener('click', async () => {
+      b.addEventListener('click', () => {
         syncDraftFromInputs()
-        const id = Number(b.getAttribute('data-remove'))
-        const path = b.getAttribute('data-path')
-        await S.removeAttachment(id, path)
-        draft.keepAtts = draft.keepAtts.filter(a => a.id !== id)
+        const id = b.getAttribute('data-remove')
+        const att = draft.keepAtts.find(a => String(a.id) === String(id))
+        if (!att) return
+        draft.removeAtts.push(att)
+        draft.keepAtts = draft.keepAtts.filter(a => String(a.id) !== id)
         renderEditor(editingId)
       })
     })
@@ -2946,6 +2952,12 @@ window.UI = (function () {
     /* 备注智能补全：点历史备注直接填，并顺手跑一遍规则 */
     const noteInput = $('#noteInput')
     if (noteInput) {
+      const updateNoteLimit = () => {
+        const remaining = Math.max(0, noteInput.maxLength - noteInput.value.length)
+        $('#noteLimit').textContent = remaining <= 20 ? '还可输入 ' + remaining + ' 个字符（表情可能占两个）' : '最多 80 个字符'
+      }
+      updateNoteLimit()
+      noteInput.addEventListener('input', updateNoteLimit)
       noteInput.addEventListener('blur', () => {
         if (editingId) return
         const before = JSON.stringify([draft.categoryId, draft.accountId, draft.tags])
@@ -2977,6 +2989,7 @@ window.UI = (function () {
           if (!el) return
           el.value = b.getAttribute('data-note')
           draft.note = el.value
+          updateNoteLimit()
           if (!editingId && applySmartRules()) renderEditor(editingId)
         }))
       })
@@ -3082,6 +3095,14 @@ window.UI = (function () {
     if (editorSaving) return
     const amount = evalAmount($('#amtInput').value)
     if (!amount || amount <= 0) { edFail('请输入大于 0 的金额（可用算式）', 'amtBox'); return }
+    const timeInput = $('#timeInput')
+    if (!timeInput.value || !timeInput.validity.valid) {
+      editorMoreOpen = true
+      $('#moreBox').classList.remove('hidden')
+      $('#moreToggle').textContent = '收起更多选项 ⌃'
+      edFail('请选择有效的记账时间', 'timeInput')
+      return
+    }
 
     /* AI 未匹配的字段须由用户确认，保存时不能被规则悄悄填回默认项。 */
     if (draft.aiReview) {
@@ -3127,13 +3148,13 @@ window.UI = (function () {
       const account = S.accounts().find(a => String(a.id) === String(draft.accountId))
       const toAccount = draft.type === 'transfer' ? S.accounts().find(a => String(a.id) === String(draft.toAccountId)) : null
       if (!account || (draft.type === 'transfer' && !toAccount)) {
-        $('#edErr').textContent = '账户已不可用，请重新选择'; return
+        edFail('账户已不可用，请重新选择', 'accChips'); return
       }
       if (draft.aiCurrency && String(account.currency || 'CNY').toUpperCase() !== draft.aiCurrency) {
-        $('#edErr').textContent = '识别金额币种为 ' + draft.aiCurrency + '，请选择同币种账户；如需换算，请退出后手动核对金额'; return
+        edFail('识别金额币种为 ' + draft.aiCurrency + '，请选择同币种账户；如需换算，请退出后手动核对金额', 'accChips'); return
       }
       if (toAccount && String(account.currency || 'CNY').toUpperCase() !== String(toAccount.currency || 'CNY').toUpperCase()) {
-        $('#edErr').textContent = '跨币种转账不能沿用同一个识别金额，请退出后手动核对两边金额'; return
+        edFail('跨币种转账不能沿用同一个识别金额，请退出后手动核对两边金额', 'toAccChips'); return
       }
     }
 
@@ -3201,6 +3222,14 @@ window.UI = (function () {
         }
         if (uploaded.length) await S.addAttachments(id, uploaded)
       }
+      let removalUncertain = false
+      if (editingId && !duplicate && draft.removeAtts.length) {
+        for (const att of draft.removeAtts) {
+          if (!draft.ownerKey || reimbKey() !== draft.ownerKey) { removalUncertain = true; break }
+          try { await S.removeAttachment(att.id, att.storage_path || '') }
+          catch (e) { removalUncertain = true; break }
+        }
+      }
       editorSaving = false
       /* 报销状态写本机覆盖层（不改表结构）：核销只改状态，不写新账目，
          所以月支出 / 收入 / 净资产都不变 */
@@ -3219,14 +3248,19 @@ window.UI = (function () {
       if (learnedFix) msg += ' · 已记住「' + learnedFix.kw + '」以后归到' + (S.categoryName(payload.category_id) || '该分类')
       toast(msg + (partialWarning ? ' · ' + partialWarning : ''))
       window.App.refresh()
-      if (keepAdding && !partialWarning) openEditor(null, payload.txn_type, { accountId: payload.account_id, categoryId: payload.category_id })
+      if (removalUncertain) {
+        openSheet('<div class="sheet-head"><b class="sheet-title">账目已保存</b><button class="btn sm line" id="attachmentPartialClose">关闭</button></div>' +
+          '<p>账目已保存，但凭证删除结果需要核对。请重新打开账目查看凭证，不要重复保存账目。</p>')
+        $('#attachmentPartialClose').addEventListener('click', closeSheet)
+      }
+      if (keepAdding && !partialWarning && !removalUncertain) openEditor(null, payload.txn_type, { accountId: payload.account_id, categoryId: payload.category_id })
       /* 预算阈值提醒（异步执行，不阻塞保存；只在跨过阈值时提示） */
       if (payload.txn_type === 'expense') checkBudgetAlert(F.toCents(amount))
     } catch (e) {
       if (e && e.code === 'CONFLICT') {
         /* 别的设备在我们编辑期间改过这条。绝不静默覆盖 —— 把两版摆出来让用户选。 */
         editorSaving = false
-        showConflictLazy(e, editingId, payload)
+        showConflictLazy(e, editingId, payload, draft.removeAtts.length > 0)
         return
       }
       if (committedId != null) {
@@ -3246,10 +3280,10 @@ window.UI = (function () {
 
   /* 冲突弹窗放在懒加载模块 js/sync-sheet.js 里 —— 只有真的冲突时才用得上，
      首屏余量极薄（155KB 硬线），这类长文案不该占预算。 */
-  function showConflictLazy(err, id, payload) {
+  function showConflictLazy(err, id, payload, hasPendingRemovals) {
     window.Lazy.need('syncui').then(function (m) {
       if (!m || !m.showConflict) throw new Error('模块不可用')
-      m.showConflict(err, id, payload)
+      m.showConflict(err, id, payload, hasPendingRemovals ? { pendingAttachmentNotice: '所选凭证尚未删除，请重新打开账目核对。' } : undefined)
     }).catch(function () {
       const b = $('#edSave')
       if (b) { b.disabled = false; b.textContent = '保存修改' }

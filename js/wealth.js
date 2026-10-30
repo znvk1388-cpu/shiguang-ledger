@@ -717,6 +717,13 @@ window.Wealth = (function () {
   }
 
   async function openCategoryBudget() {
+    const budgetMode = S.mode
+    const budgetOwner = budgetMode === 'cloud' ? S.state && S.state.uid : S.state && S.state.sourceId
+    const budgetBook = S.currentBookId && S.currentBookId()
+    const budgetActive = () => !!budgetOwner && S.mode === budgetMode &&
+      (budgetMode === 'cloud' ? S.state && S.state.uid : S.state && S.state.sourceId) === budgetOwner &&
+      (!S.currentBookId || S.currentBookId() === budgetBook)
+    if (!budgetActive()) { toast('无法确认账本身份，请重新打开预算页'); return }
     const now = new Date()
     const monthKey = F.monthKey(now)
     const from = F.iso(F.monthStart(now.getFullYear(), now.getMonth() + 1))
@@ -729,6 +736,7 @@ window.Wealth = (function () {
       S.categorySummary(from, to, 'expense').catch(() => []),
       S.categorySummary(pFrom, pTo, 'expense').catch(() => []),
     ])
+    if (!budgetActive()) { toast('账本已切换，请重新打开预算页'); return }
     const spentMap = rootSpent(cats)
     const pSpentMap = rootSpent(pCats)
     const roots = S.rootCategories('expense')
@@ -789,31 +797,69 @@ window.Wealth = (function () {
       '<div class="divider">分类额度</div>' +
       '<div class="small muted" style="margin-bottom:10px">留空=不限制。点 <b>↻</b> 让该分类上月结余滚入本月（超支则从本月扣）。</div>' +
       rows +
-      '<button class="btn block" id="cbSave">保存分类额度</button>'
+      '<div class="err" id="cbErr" role="alert"></div><button class="btn block" id="cbSave">保存分类额度</button>'
     )
-    $('#cbClose').addEventListener('click', closeSheet)
-    $('#cbTotal').addEventListener('click', () => window.UI.openMonthBudget(window.App.state))
+    let savingBudgets = false
+    let budgetWriteInProgress = false
+    $('#cbClose').addEventListener('click', () => { if (!budgetWriteInProgress) closeSheet() })
+    $('#cbTotal').addEventListener('click', () => { if (!budgetWriteInProgress) window.UI.openMonthBudget(window.App.state) })
     const moveBtn = $('#cbMove')
-    if (moveBtn) moveBtn.addEventListener('click', () => openBudgetMove(monthKey, roots, spentMap, total, assigned))
+    if (moveBtn) moveBtn.addEventListener('click', () => { if (!budgetWriteInProgress) openBudgetMove(monthKey, roots, spentMap, total, assigned) })
     $$('#sheet [data-roll]').forEach(b => {
       b.addEventListener('click', () => {
+        if (budgetWriteInProgress) return
         const id = Number(b.getAttribute('data-roll'))
         setRoll(id, !rollMap()[id])
         openCategoryBudget()
       })
     })
+    const baseline = Object.fromEntries(roots.map(c => [String(c.id), baseOf(c)]))
     $('#cbSave').addEventListener('click', async () => {
+      if (savingBudgets) return
+      const saveButton = $('#cbSave'), errorBox = $('#cbErr')
       const inputs = $$('#sheet [data-catbudget]')
+      if (!budgetActive()) { errorBox.textContent = '账本已切换，请重新打开预算页'; return }
+      const values = inputs.map(inp => ({ id: Number(inp.getAttribute('data-catbudget')), value: inp.value.trim() }))
+      if (values.some(x => x.value !== '' && (!Number.isFinite(Number(x.value)) || Number(x.value) < 0))) {
+        errorBox.textContent = '请输入有效且不小于 0 的预算金额'; return
+      }
+      const changes = values.filter(x => F.toCents(x.value === '' ? 0 : Number(x.value)) !== baseline[String(x.id)])
+      if (!changes.length) { toast('分类额度没有变化'); return }
+      savingBudgets = true
+      budgetWriteInProgress = true
+      saveButton.disabled = true
+      const controls = [$('#cbClose'), $('#cbTotal'), moveBtn, ...inputs, ...$$('#sheet [data-roll]')].filter(Boolean)
+      controls.forEach(control => { control.disabled = true })
+      const mask = $('#mask')
+      const blockMask = e => { e.preventDefault(); e.stopImmediatePropagation() }
+      const blockEscape = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation() } }
+      if (mask) mask.addEventListener('click', blockMask, true)
+      if (document.addEventListener) document.addEventListener('keydown', blockEscape, true)
+      let done = 0, current = null
       try {
-        for (const inp of inputs) {
-          const cid = Number(inp.getAttribute('data-catbudget'))
-          const v = inp.value.trim()
-          await S.setBudget(monthKey, cid, v === '' ? 0 : Number(v))
+        for (const change of changes) {
+          if (!budgetActive()) throw new Error('账本已切换')
+          current = change
+          await S.setBudget(monthKey, change.id, change.value === '' ? 0 : Number(change.value))
+          if (!budgetActive()) throw new Error('账本已切换')
+          done++
+          current = null
         }
-        closeSheet()
+        budgetWriteInProgress = false
+        if ($('#cbSave') === saveButton) closeSheet()
         toast('分类额度已保存')
         window.App.refresh()
-      } catch (e) { toast('保存失败') }
+      } catch (e) {
+        const name = current && roots.find(c => c.id === current.id)
+        const message = '已确认保存 ' + done + ' 项；' + (current ? '「' + (name ? name.name : '当前分类') + '」结果待核对，' : '') + '后续项目未保存。请先核对预算与同步状态，再重新打开调整。'
+        errorBox.textContent = message
+        if ($('#cbErr') !== errorBox) toast(message)
+      } finally {
+        budgetWriteInProgress = false
+        controls.forEach(control => { control.disabled = false })
+        if (mask) mask.removeEventListener('click', blockMask, true)
+        if (document.removeEventListener) document.removeEventListener('keydown', blockEscape, true)
+      }
     })
   }
 

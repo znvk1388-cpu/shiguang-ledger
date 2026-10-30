@@ -206,12 +206,12 @@ window.Sync = (function () {
     return e
   }
 
-  /* 这个操作是不是已经落库了。查不到就返回 false（交给用户判断）。 */
+  /* 这个操作是不是已经落库了。无法查询时必须停止重试，不能假定未写入。 */
   async function alreadySaved(item) {
     const DB = window.DB
     const table = STAMPED[item.method]
     if (item.opId && table && DB.hasOp) {
-      try { return await DB.hasOp(table, item.opId) } catch (e) { return false }
+      return await DB.hasOp(table, item.opId)
     }
     /* 命名实体（账户/分类/账本/目标）：同名 + 创建时间晚于入队时刻才算已写入。
        只按同名判重会把「用户合法创建的第二个同名账户」误吞 —— 重试之前
@@ -232,12 +232,12 @@ window.Sync = (function () {
         const paths = (a[1] || []).map(f => f && f.path).filter(Boolean)
         if (!paths.length) return false
         const db2 = window.Cloud && window.Cloud.cloud && window.Cloud.cloud.database
-        if (!db2) return false
+        if (!db2) throw new Error('无法连接云端查重')
         const r = await db2.from('attachments').select('id').in('storage_path', paths).limit(1)
-        if (r.error) return false
+        if (r.error) throw r.error
         return !!(r.data && r.data.length)
       }
-    } catch (e) { /* 查重失败就当作「没写过」 */ }
+    } catch (e) { throw e }
     return false
   }
 
@@ -259,16 +259,34 @@ window.Sync = (function () {
     }
 
     if (CREATES[item.method]) {
-      const dup = await alreadySaved(item)
+      let dup
+      try { dup = await alreadySaved(item) } catch (e) {
+        failItem(own, id, e)
+        return { error: '无法完成查重，请检查网络并核对云端后再重试' }
+      }
+      if (owner() !== own) return { error: '账号已切换，请回到原账号核对待上传操作' }
       if (dup) { drop(id); return { ok: true, skipped: true, label: LABEL[item.method] || item.method } }
     }
+    if (owner() !== own) return { error: '账号已切换，请回到原账号核对待上传操作' }
     retrying = true
     try {
       await DB[item.method].apply(DB, item.args || [])
+      if (owner() !== own) {
+        const e = new Error('重试期间账号已切换，结果待核对；请回到原账号检查云端后再处理')
+        e.code = 'REPLAY_CONTEXT_REQUIRED'
+        failItem(own, id, e)
+        return { error: e.message }
+      }
       drop(id)
       markWrite()
       return { ok: true, label: LABEL[item.method] || item.method }
     } catch (e) {
+      if (owner() !== own) {
+        const uncertain = new Error('重试期间账号已切换，结果待核对；请回到原账号检查云端后再处理')
+        uncertain.code = 'REPLAY_CONTEXT_REQUIRED'
+        failItem(own, id, uncertain)
+        return { error: uncertain.message }
+      }
       failItem(own, id, e)
       /* 删除类操作重放时「行已经不在」= 目的早已达成（上次其实删成了），
          按成功出队，而不是永远挂着一条重试不动的失败项 */
@@ -570,4 +588,5 @@ window.Sync = (function () {
     legacyOutbox, legacyCount, dropLegacy, clearLegacy, adoptLegacy,
   }
 })()
+
 

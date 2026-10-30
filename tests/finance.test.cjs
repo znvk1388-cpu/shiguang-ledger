@@ -33,7 +33,7 @@ function harness({ accounts = [], balances = [], rules = [], transactions = [], 
       setItem: (key, value) => { if (storageFail && key.startsWith('ledger10_reimb_v2:')) throw Error('quota'); storage.set(key, value) },
       removeItem: key => storage.delete(key),
     },
-    ic: () => '', prompt: () => { promptHook(); return promptValue }, setTimeout: () => {},
+    ic: () => '', prompt: text => { promptHook(text); return promptValue }, setTimeout: () => {},
     document: {
       getElementById: node,
       querySelector: node,
@@ -89,6 +89,22 @@ const recurring = (fields = {}) => Object.assign({
   active: true, amount: 10, txn_type: 'expense', account_id: 1,
   start_date: '2026-10-28', freq: 'monthly', note: '周期账目',
 }, fields)
+
+test('privacy hides reimbursement amounts in summary, details and legacy entries', async () => {
+  const t = claim(), h = harness({ transactions: [t] })
+  h.storage.set('ledger10_privacy', '1')
+  h.storage.set('ledger10_reimb', JSON.stringify({ 10: { status: 'partial', received: 3000, expect: 2000 } }))
+  h.window.Reimb.set(t.id, { status: 'partial', received: 4000 })
+  await h.window.Reimb.openPanel()
+  assert.doesNotMatch(h.html(), /100\.00|60\.00|40\.00|30\.00|20\.00/)
+  assert.match(h.html(), /\*\*\*\*/)
+  let promptText = ''
+  h.onPrompt(text => { promptText = text })
+  await h.receive(t.id, 80)
+  assert.doesNotMatch(promptText, /100\.00/)
+  assert.match(promptText, /\*\*\*\*/)
+  assert.doesNotMatch(h.message(), /60\.00/)
+})
 
 test('reimbursement displays yuan and accumulates successive receipts of 30 + 20', async () => {
   const t = claim()

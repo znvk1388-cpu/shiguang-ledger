@@ -235,6 +235,26 @@ test('category trend and tag report use converted values', async t => {
   assert.equal(charts.items[0].value, 82000)
 })
 
+test('privacy mode masks report amounts including non-num text and chart titles', async t => {
+  const { w } = setup(t, { rows: [
+    transaction({ amount: 1234.56, occurred_at: '2026-10-15T12:00:00Z' }),
+    transaction({ id: 2, amount: 4321.09, occurred_at: '2025-10-15T12:00:00Z', tags: ['日常'] }),
+  ] })
+  w.DB.monthlySummary = async (from) => String(from).startsWith('2025')
+    ? [{ month_key: '2025-10', expense: 4321.09, income: 0 }]
+    : [{ month_key: '2026-10', expense: 1234.56, income: 0 }]
+  w.localStorage.setItem('ledger10_privacy', '1')
+  for (const open of ['openHealth', 'openYoY', 'openCatTrend', 'openAudit']) {
+    await w.Insight[open]()
+    const html = w.document.getElementById('sheet').innerHTML
+    assert.doesNotMatch(html, /1,234\.56|4,321\.09/, open)
+  }
+  await w.Insight.openStatement(1)
+  assert.match(w.document.getElementById('sheet').textContent, /CSV.*包含真实金额/)
+  await w.Insight.openReportCenter()
+  assert.match(w.document.getElementById('sheet').textContent, /CSV.*包含真实金额/)
+})
+
 test('statement date changes update totals and rows together in account currency and export the currency', async t => {
   const { w } = setup(t, { rows: [
     transaction({ id: 1, txn_type: 'income', account_id: 2, amount: 40, occurred_at: '2026-10-05T12:00:00Z' }),

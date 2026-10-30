@@ -86,6 +86,40 @@ async function fixture(initial = {}) {
 
 function networkError() { return new Error('NetworkError: simulated connection loss') }
 
+test('replay checks identity after async duplicate lookup before writing or deleting a queue item', async () => {
+  for (const found of [false, true]) {
+    const f = await fixture()
+    const item = f.Sync.enqueue('addTransaction', [{ txn_type: 'expense', amount: 5 }], networkError())
+    f.DB.hasOp = async () => { f.DB.state.uid = 'other-user'; return found }
+    const result = await f.Sync.retryOne(item.id)
+    assert.match(result.error, /身份|账号/)
+    assert.equal(f.tables.transactions.length, 0)
+    f.DB.state.uid = 'test-user'
+    assert.equal(f.Sync.outbox().length, 1)
+  }
+})
+
+test('replay leaves uncertain outcome for review when identity changes during write', async () => {
+  const f = await fixture()
+  const item = f.Sync.enqueue('addTransaction', [{ txn_type: 'expense', amount: 5 }], networkError())
+  f.DB.hasOp = async () => false
+  f.DB.addTransaction = async () => { f.DB.state.uid = 'other-user'; return { id: 123 } }
+  const result = await f.Sync.retryOne(item.id)
+  assert.match(result.error, /核对/)
+  f.DB.state.uid = 'test-user'
+  assert.equal(f.Sync.outbox()[0].state, 'review')
+})
+
+test('replay does not create a duplicate if operation lookup fails', async () => {
+  const f = await fixture()
+  const item = f.Sync.enqueue('addTransaction', [{ txn_type: 'expense', amount: 5 }], networkError())
+  f.DB.hasOp = async () => { throw networkError() }
+  const result = await f.Sync.retryOne(item.id)
+  assert.match(result.error, /查重|核对/)
+  assert.equal(f.tables.transactions.length, 0)
+  assert.equal(f.Sync.outbox().length, 1)
+})
+
 test('backup can read all recurring rules across books and pages without changing the active book', async () => {
   const rules = Array.from({ length: 1002 }, (_, i) => ({ id: i + 1, book_id: i % 2 ? 2 : 1 }))
   const f = await fixture({ recurring_rules: rules })
