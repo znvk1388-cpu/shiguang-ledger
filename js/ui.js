@@ -446,7 +446,9 @@ window.UI = (function () {
     if (filtered) {
       return '<div class="empty"><div class="big">' + ic('search') + '</div><div>没有符合条件的记录</div>' +
         '<div class="small" style="margin-top:6px">试试放宽条件，或清空筛选</div>' +
-        '<button class="btn sm line" id="emptyClearFilter" style="margin-top:12px">清空筛选条件</button></div>'
+        '<div class="empty-actions">' +
+        (st.scope !== 'all' ? '<button class="btn sm" id="emptySearchAll">在全部时间查找</button>' : '') +
+        '<button class="btn sm line" id="emptyClearFilter">清空筛选条件</button></div></div>'
     }
     let anyTxn = 0
     try { anyTxn = (await S.listTransactions({ limit: 1 })).total || 0 } catch (e) { anyTxn = 0 }
@@ -469,6 +471,12 @@ window.UI = (function () {
   }
 
   function bindEmptyState(st) {
+    const all = $('#emptySearchAll')
+    if (all) all.addEventListener('click', () => {
+      st.scope = 'all'
+      st.calDay = null
+      window.App.refresh()
+    })
     const clear = $('#emptyClearFilter')
     if (clear) clear.addEventListener('click', () => {
       Object.assign(st.filters, { type: '', accountId: null, categoryId: null, keyword: '', tag: '', minAmount: '', maxAmount: '', reimbursable: false })
@@ -536,33 +544,92 @@ window.UI = (function () {
     try { return localStorage.getItem('ledger10_home_' + key) !== 'off' } catch (e) { return true }
   }
 
+  let homeRenderVersion = 0
+
+  function homeContext(st) {
+    return JSON.stringify([S.mode, reimbKey(), S.activeBookId ? S.activeBookId() : null,
+      st.scope, st.year, st.month, st.homeView])
+  }
+
+  /* 输入框保持在原位置，只替换它周围的控件与结果。 */
+  function commitHome(content, html, context) {
+    const input = $('#kwInput', content)
+    if (input && document.activeElement === input && content.dataset.homeContext === context) {
+      const template = document.createElement('template')
+      template.innerHTML = html
+      const next = $('#kwInput', template.content)
+      if (next) {
+        if (!input.dataset.composing && input.value.trim() !== next.value) input.value = next.value
+        let keep = input, incoming = next
+        while (keep !== content && incoming !== template.content) {
+          const parent = incoming.parentNode
+          const siblings = Array.from(parent.childNodes)
+          const at = siblings.indexOf(incoming)
+          Array.from(keep.parentNode.childNodes).forEach(node => { if (node !== keep) node.remove() })
+          keep.before(...siblings.slice(0, at))
+          keep.after(...siblings.slice(at + 1))
+          keep = keep.parentNode
+          incoming = parent
+        }
+        return
+      }
+    }
+    content.innerHTML = html
+    content.dataset.homeContext = context
+  }
+
   async function renderHome(st) {
-    const banner = pendingBanner() + (await dueBanner(st)) + (await reminderBanner(st))
-    const bCard = homeShow('budget') ? await budgetExecCard(st) : ''
+    const content = $('#content')
+    const version = ++homeRenderVersion
+    const context = homeContext(st)
+    const query = homeOpt(st)
+    const queryKey = JSON.stringify(query)
+    const selectedDay = st.calDay
+    const current = () => version === homeRenderVersion && st.tab === 'home' && $('#content') === content &&
+      !$('#mainView.hidden') && context === homeContext(st) && st.calDay === selectedDay &&
+      queryKey === JSON.stringify(homeOpt(st))
     const toggle = '<div class="view-toggle" id="viewToggle">' +
-      '<button class="' + (st.homeView !== 'cal' ? 'on' : '') + '" data-hv="list">' + ic('list') + '<span class="vt-t">列表</span></button>' +
-      '<button class="' + (st.homeView === 'cal' ? 'on' : '') + '" data-hv="cal">' + ic('calendar') + '<span class="vt-t">日历</span></button></div>'
+      '<button class="' + (st.homeView !== 'cal' ? 'on' : '') + '" data-hv="list" aria-label="列表视图" aria-pressed="' + (st.homeView !== 'cal') + '">' + ic('list') + '<span class="vt-t">列表</span></button>' +
+      '<button class="' + (st.homeView === 'cal' ? 'on' : '') + '" data-hv="cal" aria-label="日历视图" aria-pressed="' + (st.homeView === 'cal') + '">' + ic('calendar') + '<span class="vt-t">日历</span></button></div>'
+    try {
+      await renderHomeContent(st, query, current, content, context, toggle)
+    } catch (e) {
+      if (!current()) return
+      st.txns = []
+      st.attachments = {}
+      st.total = 0
+      const controls = st.homeView === 'cal' ? '<div class="card">' + toggle + '</div>' : renderFilterBar(st, toggle)
+      commitHome(content, controls + '<div class="empty"><div class="big">' + ic('alert') + '</div>' +
+        '<div role="status">账单暂时无法加载</div><button class="btn sm line" id="homeRetry">重新加载</button></div>', context)
+      $('#homeRetry', content).addEventListener('click', () => window.App.renderTab())
+      bindHomeTools()
+    }
+  }
+
+  async function renderHomeContent(st, query, current, content, context, toggle) {
+    const banner = pendingBanner() + (await dueBanner(st)) + (await reminderBanner(st))
+    if (!current()) return
+    const bCard = homeShow('budget') ? await budgetExecCard(st) : ''
+    if (!current()) return
 
     if (st.homeView === 'cal') {
-      await renderCalendar(st, banner + bCard, toggle)
+      await renderCalendar(st, banner + bCard, toggle, current)
       return
     }
 
-    let res
-    try {
-      res = await S.listTransactions(homeOpt(st))
-    } catch (e) {
-      $('#content').innerHTML = bCard + '<div class="empty"><div class="big">' + ic('alert') + '</div>加载失败：' + esc(e.message || '请检查网络') + '</div>'
-      bindBudgetCard()
-      return
-    }
-    st.txns = res.rows
-    st.total = res.total
-
+    const res = await S.listTransactions(query)
+    if (!current()) return
     await reimbPending()
+    if (!current()) return
     const filterBar = renderFilterBar(st, toggle)
+    const active = Object.keys(query).some(key => !['from', 'to', 'limit', 'offset'].includes(key))
+    const resultCount = active
+      ? '<div class="search-head" role="status">' + esc(periodTitle(st)) + ' · 找到 <b>' + res.total + '</b> 笔' +
+        (res.total > res.rows.length ? ' · 已显示 ' + res.rows.length + ' 笔' : '') + '</div>'
+      : ''
     if (!res.rows.length) {
       const emptyHtml = await emptyStateHtml(st)
+      if (!current()) return
       /* 首次使用（账本全空）时把引导卡提到预算卡之前，保证「记第一笔」在首屏可见；
          本期无记录 / 筛选无结果时预算卡仍在前——此时用户已有数据，更关心预算执行 */
       const firstRun = emptyHtml.indexOf('onboard-card') >= 0
@@ -570,9 +637,12 @@ window.UI = (function () {
          一起藏掉，只留一张引导卡（终审 3.1「空态收成一张卡」）。
          引导卡垂直居中：否则手机上一张 180px 的卡下面挂着近 500px 空白，
          看起来像页面没加载完。 */
-      $('#content').innerHTML = firstRun
+      st.txns = []
+      st.attachments = {}
+      st.total = res.total
+      commitHome(content, firstRun
         ? banner + '<div class="home-empty">' + emptyHtml + '</div>'
-        : banner + bCard + emptyHtml + filterBar
+        : banner + bCard + filterBar + resultCount + emptyHtml, context)
       bindReminderEvents(st)
       bindHomeTools()
       bindBudgetCard()
@@ -581,44 +651,45 @@ window.UI = (function () {
     }
 
     const atts = await S.listAttachments(res.rows.map(t => t.id))
+    if (!current()) return
+    st.txns = res.rows
+    st.total = res.total
     st.attachments = atts
 
     const groups = groupByDay(res.rows)
-    /* 搜索结果头：原来只给了列表，没有「共几笔 / 合计多少」，用户不知道搜全了没有 */
-    const kw = (st.filters.keyword || '').trim()
-    let searchHead = ''
-    if (kw) {
-      let se = 0
-      let si = 0
-      res.rows.forEach(t => {
-        const c = F.toCents(t.amount)
-        if (t.txn_type === 'expense') se += c
-        else if (t.txn_type === 'income') si += c
-      })
-      searchHead = '<div class="search-head">「' + esc(kw) + '」共 <b>' + res.total + '</b> 笔' +
-        (res.total > res.rows.length ? '（已显示 ' + res.rows.length + ' 笔）' : '') +
-        ' · 支出 <span class="num">¥' + F.yuan(se) + '</span>' +
-        (si ? ' · 收入 <span class="num">¥' + F.yuan(si) + '</span>' : '') + '</div>'
+    const accounts = new Map(S.allAccounts().map(a => [String(a.id), a]))
+    const currencyOf = t => accounts.get(String(t.account_id))?.currency || 'CNY'
+    const money = (cents, code) => F.privacy() ? '****' : esc(F.moneySym(cents, F.currencySym(code)))
+    function subtotals(rows) {
+      const sums = new Map()
+      for (const t of rows) {
+        if (t.txn_type !== 'expense' && t.txn_type !== 'income') continue
+        const currency = currencyOf(t)
+        const sum = sums.get(currency) || { expense: 0, income: 0 }
+        sum[t.txn_type] += F.toCents(t.amount)
+        sums.set(currency, sum)
+      }
+      return Array.from(sums, ([currency, sum]) => [
+        sum.expense ? '支出 <span class="num">' + money(sum.expense, currency) + '</span>' : '',
+        sum.income ? '收入 <span class="num">' + money(sum.income, currency) + '</span>' : ''
+      ].filter(Boolean).join(' · ')).filter(Boolean).join(' · ')
     }
-    let html = banner + bCard + filterBar + searchHead
+    const summary = active ? subtotals(res.rows) : ''
+    let html = banner + bCard + filterBar + resultCount +
+      (summary ? '<div class="search-head">' + (res.total > res.rows.length ? '已显示记录小计' : '筛选小计') + ' · ' + summary + '</div>' : '')
     html += groups.map(g => {
-      let dayExp = 0
-      let dayInc = 0
-      g.items.forEach(t => {
-        const c = F.toCents(t.amount)
-        if (t.txn_type === 'expense') dayExp += c
-        else if (t.txn_type === 'income') dayInc += c
-      })
+      const daySummary = subtotals(g.items)
+      const partialDay = res.total > res.rows.length && g === groups[groups.length - 1]
       const head = '<div class="day-head"><span>' + F.humanDay(g.items[0].occurred_at) + '</span>' +
-        '<span class="num">' + (dayExp ? '支 ' + F.yuan(dayExp) : '') + (dayExp && dayInc ? '　' : '') + (dayInc ? '收 ' + F.yuan(dayInc) : '') + '</span></div>'
-      const body = '<div class="card" style="padding:0">' + g.items.map(t => txnRow(t, atts[t.id] || [])).join('') + '</div>'
+        '<span class="day-subtotal">' + (partialDay && daySummary ? '已显示 · ' : '') + daySummary + '</span></div>'
+      const body = '<div class="card" style="padding:0">' + g.items.map(t => txnRow(t, atts[t.id] || [], currencyOf(t))).join('') + '</div>'
       return '<div class="day-group">' + head + body + '</div>'
     }).join('')
 
     if (res.total > res.rows.length) {
       html += '<button class="btn line block" id="loadMore" style="margin-top:4px">加载更多（共 ' + res.total + ' 笔，已显示 ' + res.rows.length + '）</button>'
     }
-    $('#content').innerHTML = html
+    commitHome(content, html, context)
     fillImages(st)
     bindTxnClicks()
     bindReminderEvents(st)
@@ -691,7 +762,7 @@ window.UI = (function () {
   }
 
   /* ---------- 月历视图（鲨鱼式） ---------- */
-  async function renderCalendar(st, banner, toggle) {
+  async function renderCalendar(st, banner, toggle, current) {
     if (st.scope !== 'month') {
       $('#content').innerHTML = banner + '<div class="card"><div class="between"><b>日历视图</b>' + toggle + '</div>' +
         '<div class="empty" style="padding:24px">日历视图只在「月」范围内可用，点右上角切回月</div></div>'
@@ -701,6 +772,7 @@ window.UI = (function () {
     const from = F.iso(F.monthStart(st.year, st.month))
     const to = F.iso(F.monthEnd(st.year, st.month))
     const res = await S.listTransactions({ from, to, limit: 5000 })
+    if (!current()) return
     const daily = {}
     res.rows.forEach(t => {
       const k = F.isoDay(t.occurred_at)
@@ -751,7 +823,7 @@ window.UI = (function () {
       }
       cells += '<div class="cal-cell' + (inMonth ? '' : ' other') + (key === todayKey ? ' today' : '') +
         (st.calDay === key ? ' sel' : '') + (heat ? ' h' + heat : '') + '" data-day="' + key + '"' +
-        (v ? ' title="' + key + (v.exp ? ' 支出 ¥' + F.yuan(v.exp) : '') + (v.inc ? ' 收入 ¥' + F.yuan(v.inc) : '') + '"' : '') + '>' +
+        (v && !F.privacy() ? ' title="' + key + (v.exp ? ' 支出 ¥' + F.yuan(v.exp) : '') + (v.inc ? ' 收入 ¥' + F.yuan(v.inc) : '') + '"' : '') + '>' +
         '<div class="d num">' + d.getDate() + '</div>' +
         (v && v.inc ? '<div class="a inc num">+' + F.compactYuan(v.inc) + '</div>' : '') +
         (v && v.exp ? '<div class="a exp num">-' + F.compactYuan(v.exp) + '</div>' : '') +
@@ -765,6 +837,7 @@ window.UI = (function () {
     if (st.calDay && daily[st.calDay]) {
       const dd = daily[st.calDay]
       const atts = await S.listAttachments(dd.items.map(t => t.id))
+      if (!current()) return
       st.attachments = atts
       st.txns = dd.items
       const sumTxt = (dd.exp ? '支 ' + F.yuan(dd.exp) : '') + (dd.exp && dd.inc ? '　' : '') + (dd.inc ? '收 ' + F.yuan(dd.inc) : '')
@@ -808,7 +881,7 @@ window.UI = (function () {
     return order.map(k => ({ day: k, items: map[k] }))
   }
 
-  function txnRow(t, atts) {
+  function txnRow(t, atts, currency) {
     const cat = t.category_id ? S.category(t.category_id) : null
     const icon = cat ? (cat.icon || '📦') : (t.txn_type === 'transfer' ? '🔄' : t.txn_type === 'income' ? '💰' : '📦')
     const color = cat ? (cat.color || '#8a93a6') : (t.txn_type === 'transfer' ? '#7c5cff' : '#8a93a6')
@@ -836,7 +909,8 @@ window.UI = (function () {
       '<div class="grow"><div class="ellipsis">' + hl(name) + reim + auto + '</div>' +
       '<div class="small muted ellipsis">' + hl(sub) + '</div></div>' +
       thumbs +
-      '<div class="amt ' + t.txn_type + ' num">' + sign + F.yuan(F.toCents(t.amount)) + '</div>' +
+      '<div class="amt ' + t.txn_type + ' num">' + (F.privacy() ? '****' :
+        sign + (currency ? esc(F.currencySym(currency)) : '') + F.yuan(F.toCents(t.amount))) + '</div>' +
       '</div>'
   }
 
@@ -858,9 +932,12 @@ window.UI = (function () {
   }
 
   function bindTxnClicks() {
+    const st = window.App.state
+    const context = homeContext(st)
     $$('#content .txn').forEach(el => {
       el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click() } })
       el.addEventListener('click', () => {
+        if (st.tab !== 'home' || context !== homeContext(st) || $('#mainView.hidden')) return
         const id = Number(el.getAttribute('data-id'))
         const txn = window.App.state.txns.find(t => t.id === id)
         if (txn) openEditor(txn)
@@ -955,6 +1032,14 @@ window.UI = (function () {
         '<button class="chip on" data-fcatclear="1">' + ic('tag') + ' ' + esc(S.categoryName(f.categoryId)) + ' ' + ic('close') + '</button>' +
         '</div>'
       : ''
+    const applied = [
+      ['tag', '标签', f.tag],
+      ['minAmount', '最低金额', F.privacy() && f.minAmount ? '****' : f.minAmount],
+      ['maxAmount', '最高金额', F.privacy() && f.maxAmount ? '****' : f.maxAmount]
+    ].filter(([, , value]) => value !== '' && value != null)
+    const appliedChips = applied.length ? '<div class="applied-filters" role="group" aria-label="已生效条件">' +
+      applied.map(([field, label, value]) => '<button class="chip" data-fremove="' + field + '" aria-label="取消' +
+        label + '条件，当前为 ' + esc(value) + '"><span>' + label + '：' + esc(value) + '</span>' + ic('close') + '</button>').join('') + '</div>' : ''
     let saved = []
     let savedError = ''
     if (st.filterOpen) { try { saved = savedFilterList() } catch (e) { savedError = e.message } }
@@ -967,20 +1052,22 @@ window.UI = (function () {
     const panel = st.filterOpen
       ? '<div class="filter-panel">' +
         '<div class="row" style="gap:8px">' +
-        '<input id="fMinAmt" class="input" style="height:38px" type="number" inputmode="decimal" placeholder="最小金额" value="' + esc(f.minAmount || '') + '">' +
+        '<input id="fMinAmt" class="input" style="height:38px" type="number" inputmode="decimal" aria-label="最小金额" placeholder="最小金额" value="' + esc(f.minAmount || '') + '">' +
         '<span class="muted">—</span>' +
-        '<input id="fMaxAmt" class="input" style="height:38px" type="number" inputmode="decimal" placeholder="最大金额" value="' + esc(f.maxAmount || '') + '">' +
+        '<input id="fMaxAmt" class="input" style="height:38px" type="number" inputmode="decimal" aria-label="最大金额" placeholder="最大金额" value="' + esc(f.maxAmount || '') + '">' +
         '</div>' +
         '<div class="row" style="gap:8px;margin-top:8px">' +
-        '<input id="fTag" class="input grow" style="height:38px" placeholder="按标签筛选，如「聚餐」" value="' + esc(f.tag || '') + '">' +
+        '<input id="fTag" class="input grow" style="height:38px" aria-label="按标签筛选" placeholder="按标签筛选，如「聚餐」" value="' + esc(f.tag || '') + '">' +
         '<button class="btn sm" id="fApply" style="flex:none">应用</button>' +
         '<button class="btn sm line" id="fClear" style="flex:none">清空</button>' +
-        '</div>' + savedPanel + '</div>'
+        '</div><div class="err" id="filterError" role="alert"></div>' + savedPanel + '</div>'
       : ''
     return '<div class="card filter-bar">' +
-      '<div class="row"><input id="kwInput" type="search" aria-label="搜索账单" class="input grow" placeholder="搜索备注 / 分类 / 账户 / 金额" value="' + esc(f.keyword) + '">' +
-      filterBtn + (toggle || '') + '</div>' +
+      '<div class="row"><div class="keyword-field grow"><input id="kwInput" type="search" aria-label="搜索账单" enterkeyhint="search" class="input" placeholder="搜索备注 / 分类 / 账户 / 金额" value="' + esc(f.keyword) + '">' +
+      '<button type="button" id="clearKeyword" aria-label="清除搜索关键词"' + (f.keyword ? '' : ' hidden') + '>' + ic('close') + '</button></div>' +
+      filterBtn + (toggle || '') + '</div><div id="searchProgress" class="small muted" role="status" hidden>正在查找…</div>' +
       '<div class="chips scroll mask-fade" style="margin-top:8px">' + chips + '</div>' + legacyReimbNotice() + catChip + accChips +
+      appliedChips +
       '<div class="chips scroll mask-fade' + (st.filterOpen ? '' : ' hidden') + '" style="margin-top:8px">' +
       '<button class="chip" id="homeGallery">' + ic('image') + ' 凭证相册</button>' +
       '<button class="chip" id="homeTag">' + ic('tag') + ' 标签</button>' +

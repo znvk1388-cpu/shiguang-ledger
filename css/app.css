@@ -1022,6 +1022,22 @@ html[data-theme="dark"] .reimb-tag.partial { background: #1e2a44; color: #a9c7ff
 /* 搜索结果头 + 关键词高亮（v1.10 P1-4） */
 .search-head { font-size: var(--fs-meta); color: var(--sub); padding: 2px 4px 8px; }
 .search-head b { color: var(--text); }
+.keyword-field { position: relative; min-width: 0; }
+.keyword-field .input { padding-right: 44px; }
+.keyword-field .input::-webkit-search-cancel-button { appearance: none; }
+#clearKeyword {
+  position: absolute; inset: 0 0 0 auto; width: 44px;
+  display: grid; place-items: center; color: var(--sub);
+}
+#clearKeyword[hidden], #searchProgress[hidden] { display: none; }
+#clearKeyword:active { color: var(--brand); }
+#clearKeyword .sg-icon, .applied-filters .sg-icon { width: 16px; height: 16px; }
+#searchProgress { margin-top: 6px; }
+.applied-filters, .empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.empty-actions { justify-content: center; }
+.applied-filters .chip { max-width: 100%; gap: 6px; }
+.applied-filters .chip span { overflow: hidden; text-overflow: ellipsis; }
+.day-subtotal { min-width: 0; text-align: right; overflow-wrap: anywhere; }
 mark { background: #fff2a8; color: inherit; border-radius: var(--r-sm); padding: 0 1px; }
 html[data-theme="dark"] mark { background: #6b5a10; color: #ffe9a8; }
 
