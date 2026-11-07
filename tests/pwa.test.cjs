@@ -61,7 +61,7 @@ function worker({ failAt } = {}) {
   const context = vm.createContext({
     self: { location: { href: 'https://ledger.test/sw.js', origin: 'https://ledger.test' }, addEventListener: (type, handler) => handlers.set(type, handler), clients: { claim: async () => { claimed = true } } },
     caches: {
-      open: async () => ({ add: async req => { if (req.url === failAt) throw new Error('offline'); downloaded.push(req.url) } }),
+      open: async name => { cacheNames.add(name); return { add: async req => { if (req.url === failAt) throw new Error('offline'); downloaded.push(req.url) } } },
       keys: async () => [...cacheNames], delete: async key => { deleted.push(key); cacheNames.delete(key) },
     },
     Request: class { constructor(url) { this.url = url } }, URL,
@@ -114,8 +114,8 @@ test('all precached files exist and activation removes only old app versions', a
   for (const url of w.downloaded) assert.ok(fs.existsSync(path.join(root, url)), url)
   w.handlers.get('activate')({ waitUntil(p) { pending = p } })
   await pending
-  assert.deepEqual(w.deleted, ['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47', 'ledger10-v48', 'ledger10-v49', 'ledger10-v50'])
-  assert.equal(w.cacheNames.has('ledger10-v51'), true)
+  assert.deepEqual(w.deleted, ['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47', 'ledger10-v48', 'ledger10-v49', 'ledger10-v50', 'ledger10-v51'])
+  assert.equal(w.cacheNames.has('ledger10-v52'), true)
   assert.equal(w.cacheNames.has('another-app'), true)
   assert.equal(w.claimed(), true)
 })

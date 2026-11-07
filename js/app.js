@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.10'
+  const VERSION = '1.18.11'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -123,8 +123,7 @@ window.App = (function () {
   /* 终审：smart.js 已移出首屏（6.9KB gz），这里不 await 它，避免拖慢首屏 */
   function seedExtras() {
     Lazy.need('smart').then(m => {
-      const n = m ? m.seedDefaultRules() : 0
-      if (n > 0) UI.toast('已准备 ' + n + ' 条自动归类规则，可随时修改')
+      if (m) m.seedDefaultRules()
     }).catch(() => { /* 忽略 */ })
     later(applyAutoBudgetLater, 4000)
   }
@@ -791,23 +790,31 @@ window.App = (function () {
   }
 
   /* ---------- 进入应用 ---------- */
+  let guestEntryPending = false
   async function enterGuest() {
-    showMain()
-    UI.toast('游客模式已开启')
+    if (guestEntryPending) return
+    guestEntryPending = true
+    const btn = $('#guestBtn')
+    const label = btn && btn.textContent
+    showAuth()
+    if (btn) { btn.disabled = true; btn.textContent = '正在准备本机账本…'; btn.setAttribute('aria-busy', 'true') }
     try {
       await S.useGuest()
       try { localStorage.setItem('ledger10_mode', 'guest') } catch (e) { /* 隐私模式忽略 */ }
       if (!S.state.categories.length || !S.state.accounts.length) {
         await S.seedPresets()
-        UI.toast('已为你准备好常用分类和账户')
       }
+      showMain()
       await seedExtras()
       await refresh()
       handleQuickAction()
       queueRecurring()
     } catch (e) {
-      $('#content').innerHTML = '<div class="empty"><div class="big">' + ic('alert') + '</div>初始化失败：' +
-        F.escapeHtml(e.message || '') + '</div>'
+      showAuth()
+      UI.toast('暂时无法打开本机账本，请重试')
+    } finally {
+      guestEntryPending = false
+      if (btn) { btn.disabled = false; btn.textContent = label; btn.removeAttribute('aria-busy') }
     }
   }
 

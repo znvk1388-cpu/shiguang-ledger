@@ -117,6 +117,7 @@ window.UI = (function () {
     cancelAnimationFrame(sheetFrame)
     sheet.removeAttribute('inert')
     sheet.setAttribute('aria-hidden', 'false')
+    sheet.classList.remove('editor-sheet', 'kp-open')
     sheet.innerHTML = html
     const title = $('.sheet-title', sheet)
     sheet.setAttribute('aria-label', title ? title.textContent : '操作面板')
@@ -137,7 +138,7 @@ window.UI = (function () {
     }
     sheetFrame = requestAnimationFrame(() => {
       sheet.classList.add('on')
-      sheet.focus({ preventScroll: true })
+      if (!sheet.contains(document.activeElement)) sheet.focus({ preventScroll: true })
     })
     return sheetVersion
   }
@@ -2424,10 +2425,6 @@ window.UI = (function () {
   let editorKpOpen = false
   /* 下次重绘是否抢焦点（只在真正打开弹窗时置位） */
   let editorFocusPending = false
-  /* 下次重绘是否滚到弹窗底部（只在真正打开弹窗时置位）。
-     v4 缺陷 5：sticky 保存栏是不透明的，记账面板比弹层高时，
-     「更多选项」会整段停在保存栏后面；打开时滚到底它才露出来。 */
-  let editorScrollBottom = false
 
   async function openEditor(txn, forceType, preset) {
     if (editorSaving) return
@@ -2437,7 +2434,6 @@ window.UI = (function () {
     editorMoreOpen = false
     editorKpOpen = false
     editorFocusPending = true
-    editorScrollBottom = true
     draft.type = forceType || (txn ? txn.txn_type : 'expense')
     draft.amount = txn ? String(txn.amount) : ''
     draft.categoryId = txn ? txn.category_id : null
@@ -2514,6 +2510,7 @@ window.UI = (function () {
     /* Esc 关闭（只在记账弹窗还开着时生效，避免监听泄漏） */
     const onKey = e => {
       if (!sheetOpen || !$('#edSave')) { document.removeEventListener('keydown', onKey); return }
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditor(editing ? txn.id : null) }
       if (e.key === 'Escape') closeSheet()
     }
@@ -2604,12 +2601,19 @@ window.UI = (function () {
       bindCatCells(editingId)
     } else if (sub) { sub.remove() }
     const accs = S.accounts()
-    const acc = accs.find(a => a.id === draft.accountId)
-    if (acc) $$('#accChips .chip').forEach(ch => {
+    $$('#accChips .chip').forEach(ch => {
+      const acc = accs.find(a => a.id === Number(ch.getAttribute('data-aid')))
+      if (!acc) return
       const on = Number(ch.getAttribute('data-aid')) === draft.accountId
       ch.classList.toggle('on', on)
       ch.innerHTML = (on ? '✓ ' : '') + esc(acc.icon) + ' ' + esc(acc.name)
     })
+    syncEditorPressed()
+  }
+
+  function syncEditorPressed() {
+    $$('#typeSeg button, #catGrid button, #subGrid button, #accChips button, #toAccChips button, #freqChips button, #reimChips button')
+      .forEach(b => b.setAttribute('aria-pressed', String(b.classList.contains('on'))))
   }
 
   /* 安全四则运算：只允许数字与 + - * / ( ) . 空格 */
@@ -2682,9 +2686,16 @@ window.UI = (function () {
   function renderEditor(editingId) {
     if (editorSaving) return
     editorSeq++
-    /* 每次重绘都保留滚动位置：点分类/账户后弹窗不会跳回顶部，避免「点了这个却落到别的账户」 */
+    /* 重绘后恢复表单滚动位置和当前控件，键盘操作可以接着往下走。 */
     const sheetEl = $('#sheet')
-    const keepScroll = sheetEl ? sheetEl.scrollTop : 0
+    const bodyEl = $('#editorBody')
+    const keepBodyScroll = !editorFocusPending && bodyEl ? bodyEl.scrollTop : 0
+    const active = sheetEl && sheetEl.contains(document.activeElement) ? document.activeElement : null
+    const activeAttr = active && ['data-etype', 'data-cid', 'data-aid', 'data-freq', 'data-reim'].find(a => active.hasAttribute(a))
+    const focusSelector = active && (active.id ? '#' + active.id :
+      activeAttr && active.parentElement.id ? '#' + active.parentElement.id + ' [' + activeAttr + '="' + active.getAttribute(activeAttr) + '"]' : null)
+    const selection = active && active.tagName === 'INPUT' && active.type === 'text'
+      ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null
     const accs = S.accounts()
     /* 常用分类置顶：按本机记录的使用频次降序，对齐主流记账 App 的"高频优先" */
     const cats = sortByUse(S.rootCategories(draft.type))
@@ -2746,14 +2757,13 @@ window.UI = (function () {
         : '') +
       '</div>'
 
-    /* 顺序即优先级（P0-2）：金额 → 分类 → 账户 → 备注，四个必填项全在首屏；
-       键盘默认收起、点金额框才展开 —— 原来「5 排键盘」插在分类前面，把分类顶到
-       吸底保存栏下面（下沿被盖 63%），用户以为「分类只有 4 个」，这是记账中断的主因。 */
+    /* 金额 → 分类 → 账户 → 备注；标题与保存区固定，表单单独滚动。 */
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">' + (editingId ? '编辑记录' : '记一笔') + '</span>' +
       '<span class="row" style="gap:6px;flex:none">' +
       '<button id="edMore" class="btn sm line" aria-label="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>' +
       '<button id="edClose" class="btn sm line">关闭</button></span></div>' +
+      '<div class="editor-body" id="editorBody">' +
       '<div class="ed-menu hidden" id="edMenu">' +
       (!editingId ? '<button class="btn sm line block" id="edContinue">保存，再记一笔</button>' : '') +
       '<button class="btn sm line block" id="edTpl">' + ic('star') + ' 存为模板</button>' +
@@ -2773,7 +2783,7 @@ window.UI = (function () {
       catBlock + accBlock +
       '<div class="field"><label for="noteInput">备注</label><input id="noteInput" class="input" aria-describedby="noteLimit" placeholder="如：和室友吃火锅" maxlength="80" value="' + esc(draft.note) + '"><div id="noteLimit" class="tiny muted"></div></div>' +
       '<div class="chips scroll" id="noteSug" style="margin:-6px 0 10px"></div>' +
-      '<button class="btn sm line block" id="moreToggle" style="margin:12px 0">' +
+      '<button class="btn sm line block" id="moreToggle" aria-controls="moreBox" aria-expanded="' + editorMoreOpen + '" style="margin:12px 0">' +
       (editorMoreOpen ? '收起更多选项 ⌃' : '更多选项：时间 · 标签 · 周期 · 报销 · 凭证图片 ⌄') + '</button>' +
       '<div id="moreBox"' + (editorMoreOpen ? '' : ' class="hidden"') + '>' +
       '<div class="field"><label for="timeInput">时间</label>' +
@@ -2784,6 +2794,7 @@ window.UI = (function () {
       imgBlock +
       '</div>' +
       '<div class="err" id="edErr" role="alert"></div>' +
+      '</div>' +
       '<div class="sheet-foot">' +
       /* 全弹层只有一个「保存」。键盘贴着它展开，右下角是「完成」（只收起键盘） */
       '<button class="btn block" id="edSave">' + (editingId ? '保存修改' : '保存') + '</button>' +
@@ -2794,30 +2805,13 @@ window.UI = (function () {
        ['1', ''], ['2', ''], ['3', ''], ['−', 'op'],
        ['.', ''], ['0', ''], ['×', 'op'], ['÷', 'op'],
        ['清空', 'fn wide'], ['完成', 'ok wide']].map(([k, cls]) =>
-        '<button type="button" class="' + cls + '" data-k="' + esc(k) + '">' + esc(k) + '</button>').join('') +
+        '<button type="button" class="' + cls + '" data-k="' + esc(k) + '" aria-label="' + ({'⌫': '删除前一位', '清空': '清空金额', '完成': '收起数字键盘', '+': '加', '−': '减', '×': '乘', '÷': '除', '.': '小数点'}[k] || k) + '">' + esc(k) + '</button>').join('') +
       '</div></div>' +
       '</div>'
     )
+    $('#sheet').classList.add('editor-sheet')
+    syncEditorPressed()
 
-    /* 打开弹层 / 异步插入「常用备注」后调用。v4 缺陷 5 要让「更多选项」不被吸底的保存栏
-     盖住，所以得往下滚；但一滚到底在横屏手机（390px 高）会把金额和分类顶出首屏，
-     用户第一眼只剩保存栏（_audit2 报了两期的老问题）。矮视口下保存栏是静态的、
-     排在内容流末尾，压根不遮挡 —— 那种情况不滚，停在工作区顶部。
-     保存栏吸在滚动区底部，它当前的上沿就是遮挡线，直接拿真实位置算最准。 */
-  function revealMoreOption() {
-    const s = $('#sheet'), f = s.querySelector('.sheet-foot')
-    if (getComputedStyle(f).position === 'static') return
-    const m = s.querySelector('#moreToggle')
-    s.scrollTop += Math.ceil(m.getBoundingClientRect().bottom - f.getBoundingClientRect().top) + 8
-  }
-
-  /* 重绘后恢复滚动位置：打开时滚到「更多选项」露出为止（见 revealMoreOption）。 */
-    const s0 = $('#sheet')
-    if (editorScrollBottom && s0) {
-      editorScrollBottom = false
-      revealMoreOption()
-    }
-    else if (keepScroll) { const s = $('#sheet'); if (s) s.scrollTop = keepScroll }
     const moreBtn = $('#moreToggle')
     if (moreBtn) moreBtn.addEventListener('click', () => {
       syncDraftFromInputs()
@@ -2861,6 +2855,7 @@ window.UI = (function () {
         $$('#freqChips .chip').forEach(x => x.classList.remove('on'))
         b.classList.add('on')
         draft.freq = b.getAttribute('data-freq')
+        syncEditorPressed()
       })
     })
     $$('#reimChips .chip').forEach(b => {
@@ -2917,6 +2912,11 @@ window.UI = (function () {
         const on = edMenu.classList.contains('hidden')
         edMenu.classList.toggle('hidden', !on)
         moreOp.setAttribute('aria-expanded', on ? 'true' : 'false')
+        if (on) {
+          if (edMenu.scrollIntoView) edMenu.scrollIntoView({ block: 'start' })
+          const first = $('button', edMenu)
+          if (first) first.focus({ preventScroll: true })
+        }
       })
     }
     $('#edSave').addEventListener('click', () => saveEditor(editingId))
@@ -2980,10 +2980,6 @@ window.UI = (function () {
         if (!hits.length) { box.innerHTML = ''; return }
         box.innerHTML = '<span class="tiny muted" style="align-self:center">常用：</span>' +
           hits.map(n => '<button class="chip" data-note="' + esc(n) + '">' + esc(n) + '</button>').join('')
-        /* 这一行是懒加载异步出现的，出现时会把下面的内容顶下去 ~46px，
-           刚贴底的滚动位置就失效了，「更多选项」又躲回保存栏后面（v4 缺陷 5）。
-           同样只滚到「刚好露出」，不一滚到底（见 revealMoreOption）。 */
-        if (!editorKpOpen) revealMoreOption()
         $$('#noteSug .chip').forEach(b => b.addEventListener('click', () => {
           const el = $('#noteInput')
           if (!el) return
@@ -3011,21 +3007,20 @@ window.UI = (function () {
     amtEl.addEventListener('input', echo)
     echo()
 
-    /* 自研键盘：数字/小数点直接追加；连按运算符替换上一个；小数点每段只允许一个 */
+    /* 保留光标和选区，修正中间数字时无需清空整笔金额。 */
     const kp = $('#keypad')
     const kpWrap = $('#keypadWrap')
-    const setKp = on => {
+    const setKp = (on, reveal) => {
       editorKpOpen = on
       if (kpWrap) kpWrap.classList.toggle('hidden', !on)
       const s = $('#sheet')
       if (s) {
         s.classList.toggle('kp-open', on)
-        /* 键盘展开后保存栏长高 5 行（实测 345px），「更多选项」会被整段盖住。
-           这时不能滚到底（金额框会被顶出视口，用户输不了数），
-           而是把金额框送到可视区顶部，表单其余部分照常滚动（v4 缺陷 5）。 */
-        if (on) {
+        /* 展开键盘时把金额送到表单顶部；横屏并排布局不需要重新滚动。 */
+        if (on && reveal !== false && getComputedStyle(s).display !== 'grid') {
           const box = $('#amtBox')
-          if (box) s.scrollTop = Math.max(0, box.offsetTop - 8)
+          const body = $('#editorBody')
+          if (box && body) body.scrollTop = Math.max(0, box.offsetTop - 8)
         }
       }
     }
@@ -3033,35 +3028,52 @@ window.UI = (function () {
     const amtBox = $('#amtBox')
     if (amtBox) amtBox.addEventListener('click', () => { if (!editorKpOpen) setKp(true) })
     amtEl.addEventListener('focus', () => { if (window.innerWidth < 640 && !editorKpOpen) setKp(true) })
-    if (kpWrap) setKp(!!editorKpOpen)
+    if (kpWrap) setKp(!!editorKpOpen, false)
+    $('#editorBody').scrollTop = keepBodyScroll
+    if (kp) kp.addEventListener('pointerdown', e => {
+      if (e.target.closest('button[data-k]') && document.activeElement === amtEl) e.preventDefault()
+    })
     if (kp) kp.addEventListener('click', e => {
       const btn = e.target.closest ? e.target.closest('button[data-k]') : null
       if (!btn) return
       const k = btn.getAttribute('data-k')
       /* 「完成」只收起键盘，不提交 —— 提交只有一个入口：#edSave */
-      if (k === '完成') { setKp(false); return }
-      let v = amtEl.value
-      if (k === '清空') v = ''
-      else if (k === '⌫') v = v.slice(0, -1)
-      else if (k === '+' || k === '−' || k === '×' || k === '÷') {
-        v = /[+\-*/×÷−]$/.test(v) ? v.slice(0, -1) + k : v + k
-      } else if (k === '.') {
-        const seg = v.split(/[+\-*/×÷−]/).pop()
-        if (seg.indexOf('.') >= 0) return
-        v = v + (seg === '' ? '0.' : '.')
-      } else v = v + k
-      amtEl.value = v
-      draft.amount = v
+      if (k === '完成') { setKp(false); $('#edSave').focus({ preventScroll: true }); return }
+      const v = amtEl.value
+      let start = amtEl.selectionStart == null ? v.length : amtEl.selectionStart
+      const end = amtEl.selectionEnd == null ? start : amtEl.selectionEnd
+      let insert = k
+      if (k === '清空') { amtEl.value = ''; amtEl.setSelectionRange(0, 0) }
+      else {
+        if (k === '⌫') { if (start === end) start = Math.max(0, start - 1); insert = '' }
+        else if (k === '+' || k === '−' || k === '×' || k === '÷') {
+          if (start === end && /[+\-*/×÷−]$/.test(v.slice(0, start))) start--
+        } else if (k === '.') {
+          const left = v.slice(0, start).split(/[+\-*/×÷−()]/).pop()
+          const right = v.slice(end).split(/[+\-*/×÷−()]/)[0]
+          if ((left + right).indexOf('.') >= 0) return
+          insert = left === '' ? '0.' : '.'
+        }
+        amtEl.setRangeText(insert, start, end, 'end')
+      }
+      draft.amount = amtEl.value
       echo()
     })
     /* Enter 直接保存 */
     amtEl.addEventListener('keydown', e => {
+      if (e.isComposing || e.keyCode === 229 || e.ctrlKey || e.metaKey) return
       if (e.key === 'Enter') { e.preventDefault(); saveEditor(editingId) }
     })
     /* 桌面端打开时自动聚焦金额并全选，省去一次点击（重绘时不重复抢焦点） */
     if (editorFocusPending) {
       editorFocusPending = false
       if (window.innerWidth >= 640) { try { amtEl.focus(); amtEl.select() } catch (e) { /* 忽略 */ } }
+    } else if (focusSelector) {
+      const target = $(focusSelector)
+      if (target) {
+        target.focus({ preventScroll: true })
+        if (selection) target.setSelectionRange(selection[0], selection[1], selection[2])
+      }
     }
     if (editingId) {
       $('#edDup').addEventListener('click', () => saveEditor(editingId, true))
