@@ -54,11 +54,13 @@ html[data-theme="dark"] { --bg:#111722; --card:#1a2230; --line:#2b3545; --text:#
 html[data-theme="dark"] .overview { background:var(--card); color:var(--text); }
 html[data-theme="dark"] .topbar,html[data-theme="dark"] .tabbar { background:var(--bg); }
 html[data-theme="dark"] .btn:not(.line):not(.ghost) { color:#101c33; }
+html[data-theme="dark"] .tabbar .tab.mid,
+html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 @media (hover:hover) { .qb-cats button:hover .qb-ic,.txn:hover { background:var(--bg); } }
 @media (max-width:360px) { .shell { padding:0 10px; } .period-bar { gap:2px; } .book-btn { padding:7px 6px; } .sg-heading-add { padding:0 10px; } .sg-eyebrow > span { display:none; } #productHeading h1 { font-size:var(--fs-section); } .overview { padding:18px; } .overview .balance { font-size:var(--fs-hero); } .overview .cell .v { font-size:var(--fs-meta); } .qb-today { padding:12px 13px; } .qb-cats { gap:4px; } }
-@media (min-width:1080px) {
+@media (min-width:1280px) and (min-height:560px) {
   #mainView { padding-left:220px; }
-  .shell { max-width:1220px; grid-template-columns:minmax(280px,340px) minmax(0,1fr); gap:0 24px; }
+  .shell { max-width:1220px; }
   #productHeading { grid-column:1 / -1; padding-top:36px; }
   /* 左栏整体占第 1 列（概览卡 + 今日/常用分类竖直排列）。
      两者如果各自占一行，#content 跨行时会把 #productHome 顶到列表底部。 */
@@ -77,11 +79,11 @@ html[data-theme="dark"] .btn:not(.line):not(.ghost) { color:#101c33; }
   .tabbar .tab { display:flex; flex:0 0 auto; flex-direction:row; align-items:center; justify-content:flex-start; gap:12px; min-height:48px; padding:0 15px; border-radius:var(--r-sm); font-size:var(--fs-body); }
   .tabbar .tab .ic { display:flex; margin:0; }
   .tabbar .tab.on { background:var(--brand-soft); color:var(--brand); }
-  .tabbar .tab[data-tab="home"] { order:2; }
-  .tabbar .tab[data-tab="stats"] { order:3; }
+  .tabbar .tab[data-tab="home"] { order:1; }
+  .tabbar .tab[data-tab="stats"] { order:2; }
   .tabbar .tab[data-tab="assets"] { order:4; }
   .tabbar .tab[data-tab="me"] { order:5; }
-  .tabbar .tab.mid { order:1; background:var(--brand); color:#fff; margin-bottom:24px; }
+  .tabbar .tab.mid { order:3; background:var(--brand); color:#fff; margin:8px 0; }
   .tabbar .tab.mid .ic { width:22px; height:22px; margin:0; background:transparent; }
   .sg-nav-add-label { display:inline; }
   .sg-sidebar-foot { display:block; order:6; margin-top:auto; padding:15px 10px 0; border-top:1px solid var(--line); font-size:var(--fs-caption); color:var(--sub); }
@@ -92,6 +94,81 @@ html[data-theme="dark"] .btn:not(.line):not(.ghost) { color:#101c33; }
   .sheet { max-width:600px; border-radius:var(--r-lg); max-height:calc(100dvh - 64px); }
   .toast { bottom:36px; }
   .chip { min-height:36px; }
+}
+/* 中等窗口使用紧凑侧栏，分屏时依照实际可用宽高回到底栏。 */
+@media (min-width:760px) and (max-width:1279px) and (min-height:560px) {
+  #mainView { padding-left:88px; }
+  .shell { max-width:900px; padding:0 20px; }
+  #productHeading { padding:20px 2px 12px; }
+  .tabbar {
+    position:fixed; inset:0 auto 0 0; width:88px; max-width:none; margin:0;
+    display:flex; flex-direction:column; align-items:stretch; gap:8px;
+    border-radius:0; border:0; border-right:1px solid var(--line);
+    padding:calc(16px + var(--safe-t)) 10px calc(16px + var(--safe-b));
+    background:var(--card); overflow-y:auto; overscroll-behavior:contain;
+  }
+  .sg-sidebar-brand { display:grid; place-items:center; padding:4px 0 12px; order:0; }
+  .sg-sidebar-brand > .sg-icon { color:var(--brand); width:28px; height:28px; }
+  .sg-sidebar-brand b, .sg-sidebar-brand > span { display:none; }
+  .tabbar .tab {
+    flex:none; min-height:66px; padding:8px 0; border-radius:var(--r-sm);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+  }
+  .tabbar .tab .ic { display:flex; margin:0; }
+  .tabbar .tab.on { background:var(--brand-soft); color:var(--brand); }
+  .tabbar .tab[data-tab="home"] { order:1; }
+  .tabbar .tab[data-tab="stats"] { order:2; }
+  .tabbar .tab.mid { order:3; background:var(--brand); color:#fff; margin:8px 0; }
+  .tabbar .tab.mid .ic { width:24px; height:24px; background:transparent; }
+  .tabbar .tab[data-tab="assets"] { order:4; }
+  .tabbar .tab[data-tab="me"] { order:5; }
+  .sg-nav-add-label { display:inline; }
+  .fab-space { height:24px; }
+}
+@media (min-width:760px) and (max-width:1179px) and (min-height:560px) {
+  .shell.home-layout .sg-aside { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+}
+/* 分栏与导航采用独立断点，确保流水区域有足够的阅读宽度。 */
+@media (min-width:1180px) and (min-height:560px) {
+  .shell { display:grid; max-width:1220px; padding:0 24px; grid-template-columns:280px minmax(0,1fr); gap:0 24px; }
+  #productHeading { grid-column:1 / -1; padding-top:28px; }
+  .sg-aside { grid-column:1; grid-row:5 / span 2; align-self:start; display:flex; flex-direction:column; }
+  .shell.has-aside > #content { grid-column:2; grid-row:5 / span 2; }
+  .shell > .topbar { position:static; grid-row:2; }
+  .shell > #updateBar { grid-row:3; }
+  .shell > #guestBanner { grid-row:4; }
+}
+@media (min-width:1280px) and (max-width:1399px) and (min-height:560px) {
+  .shell { grid-template-columns:260px minmax(0,1fr); }
+}
+/* 平板触控入口保留真实点击面积，不依赖悬停或小图标的可视尺寸。 */
+@media (min-width:500px) and (pointer:coarse) {
+  .btn, .btn.sm, .chip, .seg button, .book-btn, .period-btn,
+  .view-toggle button, #periodTitle, .slim-note button, .qb-today { min-height:44px; }
+  .period-btn { width:44px; }
+  #periodTitle, #scopeBtn, .slim-note button { min-width:44px; }
+  .slim-note { flex-wrap:wrap; gap:8px; }
+  .filter-bar .input { min-height:44px; }
+  .filter-bar .chip, .filter-bar .chip.on, .filter-bar .view-toggle button { min-height:44px; }
+}
+/* 充足空间下将金额键盘放到表单旁，竖屏与窄分屏保留单列表单。 */
+@media (min-width:1000px) and (min-height:560px) {
+  .editor-sheet.kp-open {
+    width:min(960px,calc(100vw - 64px)); max-width:none;
+    height:min(760px,calc(100dvh - 64px)); max-height:calc(100dvh - 64px);
+    display:grid; grid-template-columns:minmax(360px,1fr) minmax(280px,.85fr);
+    grid-template-rows:auto minmax(0,1fr); gap:12px 24px;
+  }
+  .editor-sheet.kp-open .sheet-head { grid-column:1; }
+  .editor-sheet.kp-open .editor-body { height:100%; }
+  .editor-sheet.kp-open .sheet-foot {
+    grid-column:2; grid-row:1 / -1; height:100%; min-height:0; margin:0; padding:0 0 0 20px;
+    border-top:0; border-left:1px solid var(--line); overflow-y:auto;
+    display:flex; flex-direction:column; justify-content:flex-end;
+  }
+  .editor-sheet.kp-open .keypad-wrap { padding-top:16px; }
+  .editor-sheet.kp-open .keypad { gap:8px; }
+  .editor-sheet.kp-open .keypad button { height:56px; }
 }
 @media print { #productHeading,#productHome,.sg-sidebar-brand,.sg-sidebar-foot { display:none!important; } #mainView { padding-left:0; } }
 /* 标题、表单、操作区各自保持位置，避免吸底栏盖住字段。 */
@@ -187,7 +264,7 @@ html[data-theme="dark"] .editor-sheet .keypad button.ok { color:#101c33; }
 /* 空账本的引导卡垂直居中，避免下面挂着一大片空白 */
 .home-empty { display: flex; align-items: center; min-height: calc(100vh - 300px); }
 .home-empty > .card { width: 100%; }
-@media (min-width: 1080px) { .home-empty { min-height: calc(100vh - 260px); } }
+@media (min-width:1180px) and (min-height:560px) { .home-empty { min-height:calc(100vh - 260px); } }
 
 /* 快捷记账条：今天支出 + 常用分类，合计 ~100px（原今日卡+工具入口共 262px） */
 .sg-quickbar { padding: 10px 12px; }
