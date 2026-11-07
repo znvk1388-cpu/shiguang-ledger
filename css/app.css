@@ -914,9 +914,9 @@ body.mp .no-mp { display: none !important; }
 .consent-err { margin: 0 2px 10px; font-size: var(--fs-meta); line-height: 1.5; color: var(--expense); }
 .legal a { color: var(--brand); text-decoration: none; }
 
-/* ≥1080px：宽屏布局本体在 product.css，这里只补它没写的三条：
+/* 双栏布局本体在 product.css，这里只补它没写的三条：
    display:grid（缺了退化成上下堆叠）、顶栏横跨两列、右栏 min-width:0（防长金额顶宽）。 */
-@media (min-width: 1080px) {
+@media (min-width:1180px) and (min-height:560px) {
   .shell { display: grid; align-items: start; padding: 0 24px; }
   .shell > .topbar, .shell > #updateBar, .shell > #guestBanner, .shell > .fab-space { grid-column: 1 / -1; }
   .shell > #content { min-width: 0; }

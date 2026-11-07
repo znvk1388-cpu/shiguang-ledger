@@ -3154,7 +3154,8 @@ window.UI = (function () {
     /* 桌面端打开时自动聚焦金额并全选，省去一次点击（重绘时不重复抢焦点） */
     if (editorFocusPending) {
       editorFocusPending = false
-      if (window.innerWidth >= 640) { try { amtEl.focus(); amtEl.select() } catch (e) { /* 忽略 */ } }
+      const touch = window.matchMedia && window.matchMedia('(pointer:coarse)').matches
+      if (window.innerWidth >= 640 && !touch) { try { amtEl.focus(); amtEl.select() } catch (e) { /* 忽略 */ } }
     } else if (focusSelector) {
       const target = $(focusSelector)
       if (target) {

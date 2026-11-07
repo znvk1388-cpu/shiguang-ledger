@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.12'
+  const VERSION = '1.18.13'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -377,8 +377,14 @@ window.App = (function () {
   }
 
   /* ---------- 渲染 ---------- */
+  let overviewPending = 0
   async function renderOverview() {
+    overviewPending++
     try { await UI.renderOverview(state) } catch (e) { /* 概览失败不影响列表 */ }
+    finally {
+      overviewPending--
+      syncShellLayout()
+    }
   }
 
   async function renderGuestBanner() {
@@ -435,12 +441,21 @@ window.App = (function () {
     const ov = document.getElementById('overview')
     const content = document.getElementById('content')
     if (!shell || !ov || !content) return
+    /* 概览会替换自己的内容，完成前先让预算卡留在流水区域。 */
+    if (overviewPending) return
     let wide = false
-    try { wide = window.matchMedia('(min-width: 1080px)').matches } catch (e) { wide = false }
+    try { wide = window.matchMedia('(min-width:1180px) and (min-height:560px)').matches } catch (e) { wide = false }
     const inContent = content.querySelector(':scope > .budget-card')
-    const inRail = ov.querySelector(':scope > .budget-card')
-    if (wide && inContent) ov.appendChild(inContent)
-    else if (!wide && inRail) content.insertBefore(inRail, content.firstChild)
+    const inRail = Array.from(ov.querySelectorAll(':scope > .budget-card'))
+    if (inContent) {
+      inRail.forEach(card => card.remove())
+      if (wide) ov.appendChild(inContent)
+    } else if (!wide && inRail.length) {
+      const card = inRail.pop()
+      inRail.forEach(old => old.remove())
+      content.insertBefore(card, content.firstChild)
+    }
+    shell.classList.toggle('home-layout', state.tab === 'home')
     shell.classList.toggle('has-aside', ov.children.length > 0)
   }
 
