@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.11'
+  const VERSION = '1.18.12'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -545,11 +545,31 @@ window.App = (function () {
         renderTab()
       })
     })
+    $$('#content [data-fremove]').forEach(b => {
+      bindOnce(b, 'click', event => {
+        const field = b.getAttribute('data-fremove')
+        if (!['tag', 'minAmount', 'maxAmount'].includes(field)) return
+        state.filters[field] = ''
+        renderTab().then(() => {
+          if (event.detail === 0 && state.tab === 'home' && document.activeElement === document.body) {
+            $('[data-fremove], [data-fpanel]')?.focus({ preventScroll: true })
+          }
+        })
+      })
+    })
     const fApply = $('#fApply')
     if (fApply) {
       bindOnce(fApply, 'click', () => {
-        state.filters.minAmount = ($('#fMinAmt') || {}).value || ''
-        state.filters.maxAmount = ($('#fMaxAmt') || {}).value || ''
+        const min = $('#fMinAmt').value
+        const max = $('#fMaxAmt').value
+        const err = $('#filterError')
+        if (min !== '' && max !== '' && Number(min) > Number(max)) {
+          if (err) err.textContent = '最小金额不能大于最大金额'
+          $('#fMaxAmt').focus()
+          return
+        }
+        state.filters.minAmount = min
+        state.filters.maxAmount = max
         state.filters.tag = (($('#fTag') || {}).value || '').trim()
         renderTab()
       })
@@ -599,29 +619,42 @@ window.App = (function () {
     const kw = $('#kwInput')
     if (kw) {
       let timer = null
-      let composing = false
-      /* 中文输入法适配：composition 期间（拼音还没上屏）不触发搜索重绘，
-         否则打字到一半列表就重排、光标被重置，输入被打断 */
-      bindOnce(kw, 'compositionstart', () => { composing = true })
-      bindOnce(kw, 'compositionend', () => {
-        composing = false
-        kw.dispatchEvent(new Event('input'))
-      })
-      bindOnce(kw, 'input', () => {
-        if (composing) return
+      const search = immediate => {
         clearTimeout(timer)
-        timer = setTimeout(() => {
-          state.filters.keyword = kw.value.trim()
-          if (state.tab === 'home') {
-            const focused = document.activeElement === kw
-            const pos = kw.selectionStart
-            UI.renderHome(state).then(() => {
-              bindContentEvents()
-              const next = $('#kwInput')
-              if (focused && next) { next.focus({ preventScroll: true }); try { next.setSelectionRange(pos, pos) } catch (e) {} }
-            })
-          }
-        }, 380)
+        if (!kw.isConnected || state.tab !== 'home' || kw.dataset.composing) return
+        const keyword = kw.value.trim()
+        state.filters.keyword = keyword
+        const clear = $('#clearKeyword')
+        if (clear) clear.hidden = !kw.value
+        const progress = $('#searchProgress')
+        if (progress) progress.hidden = false
+        const run = () => {
+          if (!kw.isConnected || state.tab !== 'home' || state.filters.keyword !== keyword || kw.dataset.composing) return
+          renderTab()
+        }
+        if (immediate) run()
+        else timer = setTimeout(run, 380)
+      }
+      bindOnce(kw, 'compositionstart', () => {
+        clearTimeout(timer)
+        kw.dataset.composing = '1'
+      })
+      bindOnce(kw, 'compositionend', () => {
+        delete kw.dataset.composing
+        search(false)
+      })
+      bindOnce(kw, 'input', e => { if (!e.isComposing) search(false) })
+      bindOnce(kw, 'keydown', e => {
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !kw.dataset.composing) {
+          e.preventDefault()
+          search(true)
+        }
+      })
+      const clear = $('#clearKeyword')
+      if (clear) bindOnce(clear, 'click', () => {
+        kw.value = ''
+        kw.focus({ preventScroll: true })
+        search(true)
       })
     }
   }
