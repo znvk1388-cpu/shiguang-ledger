@@ -765,7 +765,7 @@ window.UI = (function () {
   /* ---------- 月历视图（鲨鱼式） ---------- */
   async function renderCalendar(st, banner, toggle, current) {
     if (st.scope !== 'month') {
-      $('#content').innerHTML = banner + '<div class="card"><div class="between"><b>日历视图</b>' + toggle + '</div>' +
+    $('#content').innerHTML = banner + '<div class="card"><div class="between"><b>日历视图</b>' + toggle + '</div>' +
         '<div class="empty" style="padding:24px">日历视图只在「月」范围内可用，点右上角切回月</div></div>'
       bindBudgetCard()
       return
@@ -789,11 +789,14 @@ window.UI = (function () {
     const offset = (first.getDay() + 6) % 7
     const start = new Date(first); start.setDate(start.getDate() - offset)
     const todayKey = F.dstr(new Date())
+    const monthKey = F.monthKey(first)
+    const focusDay = st.calDay && st.calDay.slice(0, 7) === monthKey ? st.calDay :
+      todayKey.slice(0, 7) === monthKey ? todayKey : F.dstr(first)
     /* 热力基准：当月单日最大支出 */
     let maxExp = 1
     Object.keys(daily).forEach(k => { if (daily[k].exp > maxExp) maxExp = daily[k].exp })
     let cells = ''
-    const heads = ['一', '二', '三', '四', '五', '六', '日'].map(d => '<div class="cal-head">' + d + '</div>').join('')
+    const heads = ['一', '二', '三', '四', '五', '六', '日'].map(d => '<div class="cal-head" aria-hidden="true">' + d + '</div>').join('')
     for (let i = 0; i < 42; i++) {
       const d = new Date(start); d.setDate(d.getDate() + i)
       const key = F.dstr(d)
@@ -818,18 +821,23 @@ window.UI = (function () {
           seen[k2] = 1
           list.push({ col, name: (c ? c.name : '未分类') })
         })
-        dots = '<div class="dots">' + list.slice(0, 4).map(x =>
+        dots = '<span class="dots">' + list.slice(0, 4).map(x =>
           '<i title="' + esc(x.name) + '" style="background:' + x.col + '"></i>').join('') +
-          (list.length > 4 ? '<i style="background:var(--sub)"></i>' : '') + '</div>'
+          (list.length > 4 ? '<i style="background:var(--sub)"></i>' : '') + '</span>'
       }
-      cells += '<div class="cal-cell' + (inMonth ? '' : ' other') + (key === todayKey ? ' today' : '') +
+      const label = d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日，' +
+        ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][d.getDay()] +
+        (v ? '，' + v.items.length + '笔记录' + (F.privacy() ? '，金额已隐藏' :
+          (v.exp ? '，支出' + F.yuan(v.exp) + '元' : '') + (v.inc ? '，收入' + F.yuan(v.inc) + '元' : '')) : '，暂无记录')
+      cells += '<' + (inMonth ? 'button type="button"' : 'div aria-hidden="true"') + ' class="cal-cell' +
+        (inMonth ? '' : ' other') + (key === todayKey ? ' today' : '') +
         (st.calDay === key ? ' sel' : '') + (heat ? ' h' + heat : '') + '" data-day="' + key + '"' +
-        (v && !F.privacy() ? ' title="' + key + (v.exp ? ' 支出 ¥' + F.yuan(v.exp) : '') + (v.inc ? ' 收入 ¥' + F.yuan(v.inc) : '') + '"' : '') + '>' +
-        '<div class="d num">' + d.getDate() + '</div>' +
-        (v && v.inc ? '<div class="a inc num">+' + F.compactYuan(v.inc) + '</div>' : '') +
-        (v && v.exp ? '<div class="a exp num">-' + F.compactYuan(v.exp) + '</div>' : '') +
-        dots +
-        '</div>'
+        (inMonth ? ' tabindex="' + (key === focusDay ? '0' : '-1') + '" aria-pressed="' + (st.calDay === key) + '" aria-label="' + esc(label) + '"' +
+          (key === todayKey ? ' aria-current="date"' : '') : '') + '>' +
+        '<span class="d num">' + d.getDate() + '</span>' +
+        (v && v.inc ? '<span class="a inc num">+' + F.compactYuan(v.inc) + '</span>' : '') +
+        (v && v.exp ? '<span class="a exp num">-' + F.compactYuan(v.exp) + '</span>' : '') +
+        dots + '</' + (inMonth ? 'button' : 'div') + '>'
       if (i >= 28 && d.getMonth() !== (st.month - 1) && d.getDay() === 0) break
     }
 
@@ -852,17 +860,42 @@ window.UI = (function () {
       st.txns = res.rows
     }
 
+    const activeDate = document.activeElement
+    const restoreDate = activeDate && activeDate.matches('#content button.cal-cell') ? activeDate.dataset.day : null
     $('#content').innerHTML = banner +
       '<div class="card"><div class="between" style="margin-bottom:8px"><b>' + st.year + '年' + st.month + '月</b>' + toggle + '</div>' +
-      '<div class="cal-grid">' + heads + cells + '</div></div>' +
+      '<div class="cal-grid" role="group" aria-label="' + st.year + '年' + st.month + '月收支日历">' + heads + cells + '</div></div>' +
       dayList
-    $$('#content .cal-cell').forEach(c => {
+    const dateButtons = $$('#content button.cal-cell')
+    const focusDate = button => {
+      dateButtons.forEach(el => { el.tabIndex = el === button ? 0 : -1 })
+      button.focus()
+    }
+    dateButtons.forEach((c, index) => {
+      c.addEventListener('focus', () => dateButtons.forEach(el => { el.tabIndex = el === c ? 0 : -1 }))
+      c.addEventListener('keydown', e => {
+        if (e.altKey || e.ctrlKey || e.metaKey) return
+        const weekday = (new Date(c.dataset.day + 'T12:00').getDay() + 6) % 7
+        const moves = { ArrowLeft: index - 1, ArrowRight: index + 1, ArrowUp: index - 7, ArrowDown: index + 7,
+          Home: index - weekday, End: index + 6 - weekday }
+        if (!(e.key in moves)) return
+        e.preventDefault()
+        focusDate(dateButtons[Math.max(0, Math.min(dateButtons.length - 1, moves[e.key]))])
+      })
       c.addEventListener('click', () => {
-        const key = c.getAttribute('data-day')
+        const key = c.dataset.day
         st.calDay = st.calDay === key ? null : key
-        renderHome(st).then(() => window.App.bindContentEvents())
+        const work = renderHome(st), ticket = homeRenderVersion
+        work.then(() => {
+          if (ticket !== homeRenderVersion || st.tab !== 'home' || st.homeView !== 'cal') return
+          window.App.bindContentEvents()
+        })
       })
     })
+    if (restoreDate) {
+      const next = $('#content button.cal-cell[data-day="' + restoreDate + '"]')
+      if (next) next.focus({ preventScroll: true })
+    }
     if (st.calDay && daily[st.calDay]) {
       fillImages(st)
       bindTxnClicks()
@@ -1123,24 +1156,42 @@ window.UI = (function () {
   }
 
   /* ---------- 统计 ---------- */
+  let statsRenderVersion = 0
+  function statsContext(st) {
+    return JSON.stringify([S.mode, reimbKey(), S.activeBookId ? S.activeBookId() : null,
+      st.statRange, st.scope, st.year, st.month])
+  }
   async function renderStats(st) {
-    const seg = '<div class="seg" id="statSeg">' +
+    const content = $('#content'), version = ++statsRenderVersion
+    const context = statsContext(st), snapshot = Object.assign({}, st)
+    const current = () => version === statsRenderVersion && st.tab === 'stats' &&
+      $('#content') === content && !$('#mainView.hidden') && context === statsContext(st)
+    if (!current()) return
+    const active = document.activeElement
+    const focusedRange = active && active.matches('#statSeg [data-sr]') ? active.getAttribute('data-sr') : null
+    const seg = '<div class="seg" id="statSeg" role="group" aria-label="统计范围">' +
       [['month', '本月'], ['year', '本年'], ['decade', '全部']].map(([v, l]) =>
-        '<button class="' + (st.statRange === v ? 'on' : '') + '" data-sr="' + v + '">' + l + '</button>').join('') +
+        '<button class="' + (snapshot.statRange === v ? 'on' : '') + '" data-sr="' + v + '" aria-pressed="' + (snapshot.statRange === v) + '">' + l + '</button>').join('') +
       '</div>'
     let body = ''
     try {
-      if (st.statRange === 'month') body = await statsMonth(st)
-      else if (st.statRange === 'year') body = await statsYear(st)
-      else body = await statsDecade(st)
+      if (snapshot.statRange === 'month') body = await statsMonth(snapshot)
+      else if (snapshot.statRange === 'year') body = await statsYear(snapshot)
+      else body = await statsDecade(snapshot)
     } catch (e) {
       body = '<div class="empty"><div class="big">' + ic('alert') + '</div>统计失败：' + esc(e.message || '') + '</div>'
     }
+    if (!current()) return
     const tools = '<div class="row" style="gap:8px;margin-bottom:12px">' +
       '<button class="btn line grow" id="stReport">' + ic('chart-bar') + ' 报表中心</button>' +
       '<button class="btn line grow" id="stHealth">' + ic('heart') + ' 财务健康度</button>' +
       '</div>'
-    $('#content').innerHTML = seg + tools + body
+    const restoreRangeFocus = focusedRange && document.activeElement === active
+    content.innerHTML = seg + tools + body
+    if (restoreRangeFocus) {
+      const rangeButton = $('[data-sr="' + focusedRange + '"]', content)
+      if (rangeButton) rangeButton.focus({ preventScroll: true })
+    }
     $$('#statSeg button').forEach(b => {
       b.addEventListener('click', () => {
         const v = b.getAttribute('data-sr')

@@ -459,11 +459,12 @@ body.privacy .cal-cell .d.num::after { content: none; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .cal-head { font-size: var(--fs-caption); color: var(--sub); text-align: center; padding: 4px 0; }
 .cal-cell {
-  min-height: 56px; border-radius: var(--r-sm); background: #f8f9fb; padding: 4px 5px;
+  scroll-margin-block: 80px 100px; min-width: 0; width: 100%; min-height: 56px; text-align: center; color: var(--text); border-radius: var(--r-sm); background: #f8f9fb; padding: 4px 2px;
   display: flex; flex-direction: column; gap: 1px; cursor: pointer; border: 1px solid transparent;
 }
 .cal-cell:active { background: #eef1f6; }
-.cal-cell.other { opacity: .35; }
+.cal-cell.other { opacity: .35; cursor: default; }
+.cal-cell:focus-visible { outline-offset: -3px; }
 .cal-cell.today { border-color: var(--brand); }
 .cal-cell.sel { background: var(--brand-soft); border-color: var(--brand); }
 .cal-cell .d { font-size: var(--fs-meta); font-weight: 600; }
