@@ -11,12 +11,9 @@
 .btn.line { background:var(--card); border:1px solid var(--line); color:var(--text); }
 .card { border:1px solid var(--line); }
 .input { min-width:0; border-radius:var(--r-sm); }
-.sg-eyebrow { color:var(--sub); font-size:var(--fs-meta); font-weight:500; letter-spacing:.04em; }
-.sg-eyebrow > span { margin-left:8px; font-size:var(--fs-caption); letter-spacing:.14em; }
-#productHeading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:28px 2px 16px; }
-#productHeading h1 { font-size:var(--fs-display); margin:6px 0 4px; letter-spacing:-.5px; }
-#productHeading p { margin:0; color:var(--sub); font-size:var(--fs-meta); }
-.sg-heading-add { white-space:nowrap; }
+#productHeading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:24px 2px 16px; }
+#productHeading h1 { font-size:var(--fs-display); font-weight:600; margin:0; letter-spacing:-.5px; }
+.sg-heading-add { white-space:nowrap; min-height:44px; }
 .topbar { padding-top:0; }
 .period-bar { gap:8px; min-height:56px; }
 .book-btn { border:1px solid var(--line); background:var(--card); padding:7px 10px; border-radius:var(--r-sm); max-width:34%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -36,7 +33,7 @@
 .txn { min-height:74px; padding:14px; }
 .txn .ico { width:42px; height:42px; border-radius:var(--r-md); }
 .txn .amt { font-size:var(--fs-title); }
-.txn .small { margin-top:4px; font-size:var(--fs-caption); }
+.txn .small { margin-top:4px; font-size:var(--fs-meta); }
 .chip { min-height:44px; border-radius:var(--r-sm); }
 .tabbar { box-shadow:0 -4px 20px rgba(20,38,72,.035); border-top:1px solid var(--line); }
 .tabbar .tab { min-height:66px; }
@@ -50,14 +47,17 @@
 #authView .auth-card { background:var(--card); box-shadow:none; }
 .sheet { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .sheet-foot { position:sticky; bottom:0; background:var(--card); padding-top:12px; }
-html[data-theme="dark"] { --bg:#111722; --card:#1a2230; --line:#2b3545; --text:#e8edf7; --sub:#a2aec2; --brand:#759bff; --brand-2:#759bff; --brand-soft:#253655; }
+html[data-theme="dark"] { --bg:#111722; --card:#1a2230; --line:#2b3545; --text:#e8edf7; --sub:#a2aec2; --brand:#759bff; --brand-2:#759bff; --brand-soft:#253655; --brand-ink:#9ab6ff; }
 html[data-theme="dark"] .overview { background:var(--card); color:var(--text); }
 html[data-theme="dark"] .topbar,html[data-theme="dark"] .tabbar { background:var(--bg); }
 html[data-theme="dark"] .btn:not(.line):not(.ghost) { color:#101c33; }
+html[data-theme="dark"] .chip.on { background:var(--brand-soft); }
+html[data-theme="dark"] .chip.on.expense { background:var(--expense); color:#101c33; }
+html[data-theme="dark"] .chip.on.income { background:var(--income); color:#101c33; }
 html[data-theme="dark"] .tabbar .tab.mid,
 html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 @media (hover:hover) { .qb-cats button:hover .qb-ic,.txn:hover { background:var(--bg); } }
-@media (max-width:360px) { .shell { padding:0 10px; } .period-bar { gap:2px; } .book-btn { padding:7px 6px; } .sg-heading-add { padding:0 10px; } .sg-eyebrow > span { display:none; } #productHeading h1 { font-size:var(--fs-section); } .overview { padding:18px; } .overview .balance { font-size:var(--fs-hero); } .overview .cell .v { font-size:var(--fs-meta); } .qb-today { padding:12px 13px; } .qb-cats { gap:4px; } }
+@media (max-width:360px) { .shell { padding:0 10px; } .period-bar { gap:2px; } .book-btn { padding:7px 6px; } .sg-heading-add { padding:0 10px; } #productHeading h1 { font-size:var(--fs-section); } .overview { padding:18px; } .overview .balance { font-size:var(--fs-hero); } .overview .cell .v { font-size:var(--fs-meta); } .qb-today { padding:12px 13px; } .qb-cats { gap:4px; } }
 @media (min-width:1280px) and (min-height:560px) {
   #mainView { padding-left:220px; }
   .shell { max-width:1220px; }
@@ -74,8 +74,7 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   .tabbar { position:fixed; left:0; top:0; bottom:0; right:auto; width:220px; max-width:none; margin:0; border-radius:0; border:0; border-right:1px solid var(--line); box-shadow:none; padding:28px 18px; display:flex; flex-direction:column; gap:6px; background:var(--card); align-items:stretch; }
   .sg-sidebar-brand { display:grid; grid-template-columns:30px 1fr; align-items:center; gap:8px; padding:2px 10px 35px; order:0; }
   .sg-sidebar-brand > .sg-icon { color:var(--brand); width:27px; height:27px; }
-  .sg-sidebar-brand b { font-size:var(--fs-section); letter-spacing:1px; }
-  .sg-sidebar-brand > span { grid-column:1 / -1; font-size:var(--fs-caption); color:var(--sub); margin-top:4px; }
+  .sg-sidebar-brand b { font-size:var(--fs-section); font-weight:600; }
   .tabbar .tab { display:flex; flex:0 0 auto; flex-direction:row; align-items:center; justify-content:flex-start; gap:12px; min-height:48px; padding:0 15px; border-radius:var(--r-sm); font-size:var(--fs-body); }
   .tabbar .tab .ic { display:flex; margin:0; }
   .tabbar .tab.on { background:var(--brand-soft); color:var(--brand); }
@@ -87,7 +86,6 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   .tabbar .tab.mid .ic { width:22px; height:22px; margin:0; background:transparent; }
   .sg-nav-add-label { display:inline; }
   .sg-sidebar-foot { display:block; order:6; margin-top:auto; padding:15px 10px 0; border-top:1px solid var(--line); font-size:var(--fs-caption); color:var(--sub); }
-  .sg-sidebar-foot small { display:block; margin-top:8px; font-size:var(--fs-caption); }
   .fab-space { height:36px; }
   /* 弹层：窄屏是底部抽屉、≥640px 是居中对话框（见 app.css）。
      这里只放宽尺寸，别写 bottom —— 会和 app.css 的 top:50% / translate 打架。 */
@@ -109,7 +107,7 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   }
   .sg-sidebar-brand { display:grid; place-items:center; padding:4px 0 12px; order:0; }
   .sg-sidebar-brand > .sg-icon { color:var(--brand); width:28px; height:28px; }
-  .sg-sidebar-brand b, .sg-sidebar-brand > span { display:none; }
+  .sg-sidebar-brand b { display:none; }
   .tabbar .tab {
     flex:none; min-height:66px; padding:8px 0; border-radius:var(--r-sm);
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
@@ -216,11 +214,6 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 .editor-sheet .cat-cell.on .cn::before { content:'✓ '; }
 .editor-sheet .sheet-head { gap:12px; }
 .editor-sheet .sheet-foot > .btn { font-size:var(--fs-title); }
-html[data-theme="dark"] .editor-sheet .chip.on { background:var(--brand); }
-html[data-theme="dark"] .editor-sheet .cat-cell.on .cn,
-html[data-theme="dark"] .editor-sheet .chip.on,
-html[data-theme="dark"] .editor-sheet .seg button.on,
-html[data-theme="dark"] .editor-sheet .keypad button.ok { color:#101c33; }
 @media (pointer:coarse), (max-width:639px) {
   .editor-sheet .input, .editor-sheet .select, .editor-sheet .textarea { font-size:16px; }
 }
@@ -243,12 +236,12 @@ html[data-theme="dark"] .editor-sheet .keypad button.ok { color:#101c33; }
 .overview.ov-strip .ov-top { display: flex; align-items: center; gap: 8px; }
 .overview.ov-strip .label { font-size: var(--fs-caption); color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
 /* 长金额（百万级 / 多币种）降一档字号，再兜一层裁剪，任何情况下都不溢出卡片 */
-.overview.ov-strip .balance { font-size: var(--fs-section); font-weight: 750; letter-spacing: -.4px; margin: 1px 0 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.overview.ov-strip .balance { font-size: var(--fs-display); font-weight: 650; letter-spacing: -.4px; margin: 2px 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .overview.ov-strip .balance.long { font-size: var(--fs-title); letter-spacing: -.2px; }
 .overview.ov-strip .grid { display: flex; gap: 14px; margin: 0; padding: 0; border: 0; }
 .overview.ov-strip .cell { background: transparent; border: 0; padding: 0; text-align: left; min-width: 0; flex: 0 1 auto; white-space: nowrap; }
 .overview.ov-strip .cell .k { font-size: var(--fs-caption); color: var(--sub); margin-right: 4px; }
-.overview.ov-strip .cell .v { font-size: var(--fs-body); font-weight: 650; }
+.overview.ov-strip .cell .v { font-size: var(--fs-body); font-weight: 600; }
 .overview.ov-strip .cell:first-child .v { color: var(--expense); }
 .overview.ov-strip .cell:nth-child(2) .v { color: var(--income); }
 .overview.ov-strip .ov-go { flex: 0 0 auto; color: var(--sub); font-size: var(--fs-title); line-height: 1; margin-left: auto; }
@@ -273,7 +266,7 @@ html[data-theme="dark"] .editor-sheet .keypad button.ok { color:#101c33; }
   padding: 0 0 8px; text-align: left; border: 0; background: transparent; color: var(--text);
 }
 .qb-today .qb-k { color: var(--sub); font-size: var(--fs-meta); flex: none; }
-.qb-today .qb-v { font-size: var(--fs-section); font-weight: 750; letter-spacing: -.4px; min-width: 0; }
+.qb-today .qb-v { font-size: var(--fs-section); font-weight: 600; letter-spacing: -.4px; min-width: 0; }
 .qb-today .qb-n { color: var(--sub); font-size: var(--fs-caption); margin-right: auto; }
 .qb-today .qb-off { font-size: var(--fs-meta); font-weight: 400; color: var(--sub); margin-right: auto; }
 .qb-today .sg-icon { width: 15px; height: 15px; color: var(--sub); align-self: center; flex: none; }
@@ -283,22 +276,23 @@ html[data-theme="dark"] .editor-sheet .keypad button.ok { color:#101c33; }
 .qb-ic {
   display: flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; border-radius: var(--r-sm);
-  background: var(--bg); border: 1px solid var(--line); font-size: var(--fs-title); line-height: 1;
+  background: transparent; border: 1px solid transparent; font-size: var(--fs-title); line-height: 1;
 }
-.qb-ic-more { background: var(--brand-soft); color: var(--brand); border-color: transparent; }
+.qb-ic-more { background: var(--brand-soft); color: var(--brand-ink); }
 .qb-ic-more .sg-icon { width: 16px; height: 16px; }
 .qb-lb { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-caption); color: var(--sub); }
 
-/* 窄屏页头瘦身：把 131px 的「品牌大标题 + 副标题」压到 ~56px，
-   首屏高度留给流水。桌面端（≥560px）保持原样。 */
+/* 页头只保留当前位置与记账入口，手机点击区与平板保持一致。 */
 @media (max-width: 559px) {
   #productHeading { padding: 8px 2px 6px; align-items: center; }
-  #productHeading h1 { font-size: var(--fs-section); margin: 1px 0 0; letter-spacing: -.3px; }
-  #productHeading p { display: none; }
-  .sg-eyebrow { font-size: var(--fs-caption); }
-  .sg-eyebrow > span { font-size: var(--fs-caption); }
-  .sg-heading-add { height: 34px; padding: 0 12px; font-size: var(--fs-meta); }
+  #productHeading h1 { font-size: var(--fs-section); letter-spacing: -.3px; }
+  .sg-heading-add { padding: 0 12px; font-size: var(--fs-meta); }
 }
+
+/* 筛选属于流水工具栏，以留白分组；账目与预算才使用完整容器。 */
+.filter-bar.card { background:transparent; border:0; box-shadow:none; padding:8px 0; }
+.budget-card--brief .progress { height:6px; margin-top:8px; }
+.budget-card--brief .budget-tip { margin-top:8px; }
 
 /* 统计页只保留账本按钮与隐私开关：时间由页面内的「本月/本年/十年」分段管 */
 .period-bar.only-actions #prevBtn,

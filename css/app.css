@@ -5,8 +5,8 @@
    --radius 18 / 20），同一份界面里存在两代设计语言。现在合并成唯一一份：
    · 浅色 --bg #f5f6f8 / 深色 #121722（与 product.css 一致）
    · 语义色按主题重算，浅色与深色下正文级对比度均 ≥ 4.5:1
-   圆角只留四档：--r-sm(10) / --r-md(14) / --r-lg(20) / --r-pill(999)
-   字号只留七阶：caption 11 / meta 12.5 / body 14 / title 16 / section 20 /
+   圆角只留四档：--r-sm(8) / --r-md(12) / --r-lg(16) / --r-pill(999)
+   字号只留七阶：caption 12 / meta 13 / body 14 / title 16 / section 20 /
    display 26 / hero 34
    ========================================================================== */
 :root {
@@ -18,6 +18,7 @@
   --brand: #336bea;        /* 白底 4.74:1 */
   --brand-2: #336bea;
   --brand-soft: #eaf0ff;
+  --brand-ink: #2458c7;    /* 淡蓝选中底上的文字，保持正文对比度 */
   --expense: #c8343a;      /* 支出 · 5.24:1 */
   --income: #0d7a3e;       /* 收入 · 5.43:1 */
   --warn: #d98600;         /* 指示色（进度条 / 描边） */
@@ -26,8 +27,8 @@
 
   /* 字号阶（7 档）；--fs-graphic / --fs-logo 只给 emoji、启动 logo 这类「图形字号」，
      不参与文字排版，也不算进 7 档里 */
-  --fs-caption: 11px;
-  --fs-meta: 12.5px;
+  --fs-caption: 12px;
+  --fs-meta: 13px;
   --fs-body: 14px;
   --fs-title: 16px;
   --fs-section: 20px;
@@ -37,12 +38,12 @@
   --fs-logo: 56px;
 
   /* 圆角（4 档） */
-  --r-sm: 10px;
-  --r-md: 14px;
-  --r-lg: 20px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
   --r-pill: 999px;
 
-  --shadow: 0 1px 2px rgba(18, 26, 46, .05), 0 10px 30px rgba(18, 26, 46, .07);
+  --shadow: 0 1px 3px rgba(18, 26, 46, .06);
   --safe-b: env(safe-area-inset-bottom, 0px);
   /* PWA 全屏（apple-mobile-web-app-capable=yes）时刘海 / 灵动岛会压住顶栏，
      viewport-fit=cover 已开，这里把系统 inset 暴露成变量供顶栏使用 */
@@ -108,7 +109,7 @@ input, select, textarea { outline: none; }
 
 /* ---------- 通用容器 ---------- */
 .shell { max-width: 720px; margin: 0 auto; padding: 0 12px; }
-.card { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 16px; margin-bottom: 12px; transition: box-shadow .2s ease; }
+.card { background: var(--card); border-radius: var(--r-lg); box-shadow: none; padding: 16px; margin-bottom: 12px; }
 .row { display: flex; align-items: center; gap: 10px; }
 .between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .grow { flex: 1; min-width: 0; }
@@ -150,9 +151,9 @@ input, select, textarea { outline: none; }
   font-size: var(--fs-meta); color: var(--text); white-space: nowrap; transition: all .15s;
 }
 .chip:active { transform: scale(.97); }
-.chip.on { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; box-shadow: 0 4px 12px rgba(47,107,239,.25); }
-.chip.on.expense { background: var(--expense); border-color: var(--expense); }
-.chip.on.income { background: var(--income); border-color: var(--income); }
+.chip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-ink); font-weight: 600; box-shadow: none; }
+.chip.on.expense { background: var(--expense); border-color: var(--expense); color: #fff; }
+.chip.on.income { background: var(--income); border-color: var(--income); color: #fff; }
 
 /* 预算结转开关：小方钮，点一下切换「上月结余滚入本月」 */
 .roll-btn {
@@ -290,8 +291,9 @@ input, select, textarea { outline: none; }
   display: flex; align-items: center; gap: 12px; padding: 12px 14px;
   background: #fff; border-bottom: 1px solid var(--line); transition: background .12s;
 }
-.txn:first-of-type { border-radius: var(--r-lg) var(--r-lg) 0 0; }
-.txn:last-of-type { border-radius: 0 0 var(--r-lg) var(--r-lg); border-bottom: none; }
+.txn-list { overflow: hidden; }
+.txn:focus-visible { outline-offset: -3px; }
+.txn:last-of-type { border-bottom: none; }
 .txn:active { background: #f6f8fc; }
 /* 内容层 emoji 徽标（分类 / 账户）：统一 40×40、圆角 14、白底描边，emoji 走 --fs-section 一档，
    grid 居中。系统层（导航 / 按钮 / 状态行）一律用 icons.svg，不许出现 emoji（终审 4.4）。
@@ -307,9 +309,9 @@ input, select, textarea { outline: none; }
 .empty .big { font-size: var(--fs-graphic); margin-bottom: 10px; }
 
 /* ---------- 统计 ---------- */
-.seg { display: flex; background: #fff; border-radius: var(--r-sm); padding: 3px; box-shadow: var(--shadow); margin-bottom: 12px; }
+.seg { display: flex; background: var(--bg); border-radius: var(--r-sm); padding: 3px; box-shadow: none; margin-bottom: 12px; }
 .seg button { flex: 1; height: 36px; border-radius: var(--r-sm); font-size: var(--fs-meta); color: var(--sub); transition: all .15s; }
-.seg button.on { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; font-weight: 600; box-shadow: 0 4px 12px rgba(47,107,239,.22); }
+.seg button.on { background: var(--brand-soft); color: var(--brand-ink); font-weight: 600; box-shadow: none; }
 
 .bar-list { display: flex; flex-direction: column; gap: 10px; }
 .bar-item { display: flex; align-items: center; gap: 10px; border-radius: var(--r-sm); }
@@ -505,7 +507,7 @@ body.privacy .cal-cell .d.num::after { content: none; }
 .keypad button.fn { font-size: var(--fs-title); color: var(--sub); font-weight: 500; }
 .keypad button.wide { grid-column: span 2; }
 /* 键盘右下角的「保存」：单手输完金额即可落账，不必再够到底部按钮 */
-.keypad button.ok { background: var(--brand); color: #fff; font-size: var(--fs-title); }
+.keypad button.ok { background: var(--brand-soft); color: var(--brand-ink); border: 1px solid var(--line); font-size: var(--fs-title); }
 .keypad button.ok:active { filter: brightness(.94); }
 
 /* ---------- 分类宫格 ----------
@@ -526,10 +528,10 @@ body.privacy .cal-cell .d.num::after { content: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cat-cell.on { border-color: var(--brand); background: var(--brand-soft); }
-.cat-cell.on .cn { color: var(--brand); font-weight: 600; }
+.cat-cell.on .cn { color: var(--brand-ink); font-weight: 600; }
 .cat-grid.sub .cat-cell { padding: 11px 4px; }
 .cat-grid.sub .cat-cell .cn { font-size: var(--fs-meta); color: var(--text); }
-.cat-grid.sub .cat-cell.on .cn { color: var(--brand); }
+.cat-grid.sub .cat-cell.on .cn { color: var(--brand-ink); }
 .cat-freq { position: absolute; top: 3px; right: 3px; font-size: var(--fs-caption); line-height: 1; font-weight: 600; padding: 2px 4px; border-radius: var(--r-sm); background: var(--brand-soft); color: var(--brand); }
 .calc-row { display: flex; align-items: center; gap: 8px; padding: 2px 2px 10px; }
 .calc-row .calc-echo { padding: 0; min-height: 0; }
@@ -569,6 +571,7 @@ html[data-theme="dark"] {
   --brand: #759bff;        /* 6.00:1 */
   --brand-2: #759bff;
   --brand-soft: #253655;
+  --brand-ink: #9ab6ff;
   --expense: #ff7b7b;      /* 6.36:1 */
   --income: #3ddc97;       /* 9.03:1 */
   --warn: #f7c96a;
@@ -722,11 +725,9 @@ html[data-ui="large"] .textarea { height: 50px; font-size: var(--fs-title); }
 /* ===================== 色盲友好配色（蓝出橙进，靠明暗区分） ===================== */
 html[data-palette="colorblind"] {
   --expense: #2563eb;
-  --income: #e07b00;
+  --income: #a85100;
 }
-html[data-palette="colorblind"] .overview {
-  background: linear-gradient(135deg, #1f4fd8 0%, #3f74f5 55%, #6f9bff 100%);
-}
+
 html[data-palette="colorblind"] .pill-exp { background: #e8effd; }
 html[data-palette="colorblind"] .pill-inc { background: #fdf2e2; }
 html[data-theme="dark"][data-palette="colorblind"] {
@@ -768,7 +769,7 @@ html[data-theme="dark"][data-palette="colorblind"] .pill-inc { background: #3a2c
 }
 
 /* ===================== 本月预算执行卡片 ===================== */
-.budget-card #budgetSetBtn { border-style: dashed; color: var(--brand); }
+.budget-card #budgetSetBtn { color: var(--brand-ink); }
 .budget-card .progress { border-radius: var(--r-sm); }
 /* 宽屏左栏很窄，「剩余金额(26px) + 已花/预算」同行会折行。
    允许两段各自收缩，并在放不下时整体换成两行，而不是把「已花」拆断。 */
@@ -964,10 +965,7 @@ body.mp .no-mp { display: none !important; }
 .cat-grid.five .cat-cell { padding: 8px 3px 7px; gap: 3px; border-radius: var(--r-sm); }
 .cat-grid.five .cat-cell .ci { font-size: var(--fs-section); }
 .cat-grid.five .cat-cell .cn { font-size: var(--fs-caption); }
-/* 选中态改实心：原来只有淡背景 + 描边，一排全是灰的时候看不出到底选了哪个 */
-.cat-cell.on { border-color: var(--brand); background: var(--brand); }
-.cat-cell.on .cn { color: #fff; font-weight: 600; }
-.cat-grid.sub .cat-cell.on .cn { color: #fff; }
+/* 淡色底、描边与勾选共同表达分类选中，实色主操作留给保存按钮。 */
 
 /* 右上角「⋯」菜单：再记一笔 / 存为模板 / 删除，从吸底栏收进来 */
 .ed-menu { display: grid; gap: 6px; margin: -2px 0 10px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); }

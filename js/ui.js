@@ -377,17 +377,18 @@ window.UI = (function () {
       ? '<div class="budget-pace small muted">时间已过 ' + timePct.toFixed(0) + '% · 预算已用 ' + pctRaw.toFixed(0) + '%' +
         (pctRaw > timePct + 10 ? '，支出快于时间进度' : '，可结合固定账单安排支出') + '</div>' : ''
 
-    const bar = '<div class="progress ' + cls + '" style="margin-top:8px;height:10px" role="progressbar" aria-label="预算使用进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(pct) + '"><i style="width:' + pct + '%;background:' + barColor + '"></i></div>'
+    const bar = '<div class="progress ' + cls + '"' + (forceMonth ? ' style="margin-top:8px;height:10px"' : '') + ' role="progressbar" aria-label="预算使用进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(pct) + '"><i style="width:' + pct + '%;background:' + barColor + '"></i></div>'
     const head = '<div class="between" style="margin-bottom:8px"><b>' + periodName + '预算</b>' +
       '<button class="btn sm line" id="budgetSetBtn">调整预算</button></div>'
 
-    /* 明细页：大数字已经由顶部锚点（本月还能花 / 本月已超支）承担，
-       这里再放一个同样的 26px 数字就是重复 —— 只留进度、已花和建议，省 40px 高度 */
+    /* 首页只保留预算执行摘要，正常进度不再重复顶部额度与日均说明。 */
     if (!forceMonth) {
-      return '<div class="card budget-card">' + head +
-        '<div class="small muted">' + rangeLabel + ' · 已花 <span class="num">¥' + F.yuan(spent) + '</span> / <span class="num">¥' + F.yuan(total) + '</span></div>' +
+      const briefTip = over ? '已超出预算，留意后续支出。' :
+        isCurrent && pctRaw > timePct + 10 ? '支出快于本月时间进度。' : ''
+      return '<div class="card budget-card budget-card--brief">' + head +
+        '<div class="small muted">已花 <span class="num">¥' + F.yuan(spent) + '</span> / <span class="num">¥' + F.yuan(total) + '</span></div>' +
         bar +
-        '<div class="small budget-tip" style="margin-top:8px;color:' + (over ? 'var(--expense)' : 'var(--sub)') + '">' + tip + '</div>' + pace +
+        (briefTip ? '<div class="small budget-tip" style="color:' + (over ? 'var(--expense)' : 'var(--sub)') + '">' + briefTip + '</div>' : '') +
         '</div>'
     }
 
@@ -682,7 +683,7 @@ window.UI = (function () {
       const partialDay = res.total > res.rows.length && g === groups[groups.length - 1]
       const head = '<div class="day-head"><span>' + F.humanDay(g.items[0].occurred_at) + '</span>' +
         '<span class="day-subtotal">' + (partialDay && daySummary ? '已显示 · ' : '') + daySummary + '</span></div>'
-      const body = '<div class="card" style="padding:0">' + g.items.map(t => txnRow(t, atts[t.id] || [], currencyOf(t))).join('') + '</div>'
+      const body = '<div class="card txn-list" style="padding:0">' + g.items.map(t => txnRow(t, atts[t.id] || [], currencyOf(t))).join('') + '</div>'
       return '<div class="day-group">' + head + body + '</div>'
     }).join('')
 
@@ -843,7 +844,7 @@ window.UI = (function () {
       const sumTxt = (dd.exp ? '支 ' + F.yuan(dd.exp) : '') + (dd.exp && dd.inc ? '　' : '') + (dd.inc ? '收 ' + F.yuan(dd.inc) : '')
       dayList = '<div class="day-head" style="margin-top:4px"><span>' + F.humanDay(st.calDay + 'T12:00') + '</span>' +
         '<span class="num">' + sumTxt + '</span></div>' +
-        '<div class="card" style="padding:0">' + dd.items.map(t => txnRow(t, atts[t.id] || [])).join('') + '</div>'
+        '<div class="card txn-list" style="padding:0">' + dd.items.map(t => txnRow(t, atts[t.id] || [])).join('') + '</div>'
     } else if (st.calDay) {
       st.txns = []
       dayList = '<div class="empty" style="padding:18px">这一天没有记录</div>'
