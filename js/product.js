@@ -5,11 +5,11 @@
   const icon = name => '<svg class="sg-icon" aria-hidden="true"><use href="assets/icons.svg#' + name + '"></use></svg>'
   let revision = 0
   function header(st) {
-    const titles = { home: ['收支明细', '每一笔，都心中有数。'], stats: ['收支统计', '看清钱花在哪里。'], assets: ['我的资产', '账户、负债与攒钱计划。'], me: ['我的', '管理账本，也照顾数据。'] }
+    const titles = { home: '收支明细', stats: '收支统计', assets: '我的资产', me: '我的' }
     const text = titles[st.tab] || titles.home
     let el = document.getElementById('productHeading')
     if (!el) { el = document.createElement('header'); el.id = 'productHeading'; document.querySelector('.topbar').before(el) }
-    el.innerHTML = '<div><div class="sg-eyebrow">拾光记账 <span>SHIGUANG</span></div><h1>' + text[0] + '</h1><p>' + text[1] + '</p></div>' +
+    el.innerHTML = '<h1>' + text + '</h1>' +
       '<button class="btn line sg-heading-add" id="sgHeadingAdd">' + icon('plus') + '记一笔</button>'
     document.getElementById('sgHeadingAdd').onclick = () => U.openEditor(null)
     document.querySelectorAll('#tabbar [data-tab]').forEach(el => {
@@ -88,8 +88,8 @@
       b.querySelector('.ic').innerHTML = icon(icons[b.dataset.tab])
       if (b.dataset.tab === 'add') b.insertAdjacentHTML('beforeend', '<span class="sg-nav-add-label">记一笔</span>')
     })
-    nav.insertAdjacentHTML('afterbegin', '<div class="sg-sidebar-brand">' + icon('sun') + '<b>拾光记账</b><span>记下生活，花得从容。</span></div>')
-    nav.insertAdjacentHTML('beforeend', '<div class="sg-sidebar-foot">随手记录，好好生活。<small>v' + ((window.App && window.App.version) || '—') + ' · 数据由你掌握</small></div>')
+    nav.insertAdjacentHTML('afterbegin', '<div class="sg-sidebar-brand">' + icon('sun') + '<b>拾光记账</b></div>')
+    nav.insertAdjacentHTML('beforeend', '<div class="sg-sidebar-foot">v' + ((window.App && window.App.version) || '—') + '</div>')
     const guest = document.getElementById('guestBtn')
     if (guest) guest.innerHTML = icon('plus') + '开始记账'
     document.querySelectorAll('.auth-logo').forEach(el => { if (el.closest('#authView')) el.innerHTML = icon('sun') })
@@ -100,4 +100,5 @@
     })
   })
 })()
+
 
