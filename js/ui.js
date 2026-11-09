@@ -83,6 +83,37 @@ window.UI = (function () {
     }, 2200)
   }
 
+  /* 动效只负责反馈：不延后操作，不保留覆盖样式，重复触发和系统偏好变化均可取消。 */
+  const feedbackByElement = new WeakMap(), runningFeedback = new Set()
+  const motionPreference = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
+  function cancelFeedback(el) {
+    const previous = feedbackByElement.get(el)
+    if (previous) previous.cancel()
+  }
+  function animateFeedback(el, kind) {
+    if (!el) return
+    cancelFeedback(el)
+    if (!el.isConnected || !motionPreference || motionPreference.matches || typeof el.animate !== 'function') return
+    try {
+      const replace = kind === 'replace'
+      const animation = el.animate(replace ? [{ opacity: .72 }, { opacity: 1 }] :
+        [{ opacity: .8, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }],
+        { duration: replace ? 140 : 180, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'none' })
+      feedbackByElement.set(el, animation)
+      runningFeedback.add(animation)
+      const done = () => {
+        runningFeedback.delete(animation)
+        if (feedbackByElement.get(el) === animation) feedbackByElement.delete(el)
+      }
+      Promise.resolve(animation.finished).then(done, done)
+    } catch (e) { /* 不支持动效时直接保留已就绪的界面 */ }
+  }
+  const onMotionPreference = () => {
+    if (motionPreference.matches) runningFeedback.forEach(animation => animation.cancel())
+  }
+  if (motionPreference && motionPreference.addEventListener) motionPreference.addEventListener('change', onMotionPreference)
+  else if (motionPreference && motionPreference.addListener) motionPreference.addListener(onMotionPreference)
+
   let sheetReturnFocus = null
   let sheetOpen = false
   let sheetVersion = 0
@@ -111,6 +142,8 @@ window.UI = (function () {
   function openSheet(html) {
     const sheet = $('#sheet')
     if (editorSaving) return
+    const replacing = sheetOpen
+    cancelFeedback(sheet)
     if (!sheetOpen) sheetReturnFocus = document.activeElement
     sheetOpen = true
     sheetVersion++
@@ -138,6 +171,7 @@ window.UI = (function () {
     }
     sheetFrame = requestAnimationFrame(() => {
       sheet.classList.add('on')
+      if (replacing) animateFeedback(sheet, 'replace')
       if (!sheet.contains(document.activeElement)) sheet.focus({ preventScroll: true })
     })
     return sheetVersion
@@ -149,6 +183,7 @@ window.UI = (function () {
     editorKeyHandler = null
     editorBaseline = null
     cancelAnimationFrame(sheetFrame)
+    cancelFeedback($('#sheet'))
     $('#sheet').classList.remove('on')
     $('#mask').classList.remove('on')
     document.body.classList.remove('sheet-open')
@@ -3238,7 +3273,7 @@ window.UI = (function () {
     const el = $('#' + fieldId)
     if (!el) return
     el.classList.add('invalid')
-    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch (e) { /* 忽略 */ }
+    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: motionPreference && motionPreference.matches ? 'auto' : 'smooth' }) } catch (e) { /* 忽略 */ }
     setTimeout(() => { try { el.classList.remove('invalid') } catch (e) { /* 忽略 */ } }, 2400)
   }
 
@@ -3331,6 +3366,8 @@ window.UI = (function () {
     editorSaving = true
     btn.disabled = true
     btn.textContent = '保存中…'
+    btn.classList.add('is-loading')
+    btn.setAttribute('aria-busy', 'true')
     let committedId = null
     let partialWarning = ''
     /* 用户把 AI / 规则给的分类改了 → 记住「这条备注 → 你选的分类」，下次自动套用 */
@@ -3398,7 +3435,8 @@ window.UI = (function () {
       let msg = duplicate ? '已复制再记一笔（时间取现在，图片不复制）' : editingId ? '已更新' : '已记录'
       if (ruleHits.length) msg += ' · 自动归类：' + ruleHits.join('、')
       if (learnedFix) msg += ' · 已记住「' + learnedFix.kw + '」以后归到' + (S.categoryName(payload.category_id) || '该分类')
-      toast(msg + (partialWarning ? ' · ' + partialWarning : ''))
+      toast(msg + (partialWarning ? ' · ' + partialWarning : ''),
+        partialWarning || removalUncertain ? undefined : { icon: ic('check') })
       window.App.refresh()
       if (removalUncertain) {
         openSheet('<div class="sheet-head"><b class="sheet-title">账目已保存</b><button class="btn sm line" id="attachmentPartialClose">关闭</button></div>' +
@@ -3427,7 +3465,11 @@ window.UI = (function () {
         btn.textContent = editingId ? '保存修改' : '保存'
         $('#edErr').textContent = '保存失败：' + (e.message || '请检查网络后重试')
       }
-    } finally { editorSaving = false }
+    } finally {
+      editorSaving = false
+      btn.classList.remove('is-loading')
+      btn.removeAttribute('aria-busy')
+    }
   }
 
   /* 冲突弹窗放在懒加载模块 js/sync-sheet.js 里 —— 只有真的冲突时才用得上，
@@ -3576,7 +3618,7 @@ window.UI = (function () {
   }
 
   return {
-    $, $$, toast, openSheet, closeSheet, lightbox, ic,
+    $, $$, toast, openSheet, closeSheet, lightbox, ic, animateFeedback,
     savedFilterList, savedFilterSave, savedFilterApply, savedFilterDelete, pendingBanner, reimbStatusOf, writeReimb, reimbPending, legacyReimbNotice,
     renderOverview, renderHome, renderStats, renderAssets, renderMe, ledgerEmpty,
     openEditor, loadMore, periodRange, periodTitle, openPeriodPicker,

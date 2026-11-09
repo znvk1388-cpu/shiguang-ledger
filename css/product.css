@@ -218,8 +218,8 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   .editor-sheet .input, .editor-sheet .select, .editor-sheet .textarea { font-size:16px; }
 }
 @media (prefers-reduced-motion:no-preference) {
-  .editor-sheet .keypad button { transition:background .12s ease, transform .08s ease; }
-  .editor-sheet .keypad button:active { transform:scale(.97); }
+  .editor-sheet .keypad button { transition:background-color var(--motion-fast), transform var(--motion-base) var(--ease-out); }
+  .editor-sheet .keypad button:active { transform:scale(.97); transition-duration:var(--motion-press); }
 }
 /* 提示避开数字键盘，输入时仍能看清每一个键。 */
 .sheet-open .toast { top:calc(12px + var(--safe-t)); bottom:auto; }
@@ -300,3 +300,31 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 .period-bar.only-actions #periodTitle,
 .period-bar.only-actions #scopeBtn { display: none; }
 
+
+/* 操作反馈：保持布局与文字稳定，只改变按压、表面颜色和短时透明度。 */
+.cat-cell, .cal-cell, .seg button, .view-toggle button, .qb-ic {
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast), transform var(--motion-base) var(--ease-out);
+}
+.cat-cell:active, .cal-cell:not(.other):active, .seg button:active, .view-toggle button:active {
+  transform: scale(.98); transition-duration: var(--motion-press);
+}
+.qb-cats > button:active .qb-ic { transform: scale(.94); transition-duration: var(--motion-press); }
+.btn.is-loading:disabled { opacity: 1; cursor: progress; }
+.btn.is-loading::before {
+  content: ''; flex: none; width: 14px; height: 14px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; animation: sg-spin .7s linear infinite;
+}
+.toast-ic { display: inline-block; margin-right: 6px; vertical-align: -3px; }
+.toast-ic .sg-icon { width: 17px; height: 17px; }
+@keyframes sg-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: no-preference) {
+  .toast.on .toast-ic .sg-icon { stroke-dasharray: 28; animation: sg-check var(--motion-sheet) var(--ease-out) both; }
+  @keyframes sg-check { from { stroke-dashoffset: 28; } to { stroke-dashoffset: 0; } }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn:active, .chip:active, .cat-cell:active, .cal-cell:active, .seg button:active,
+  .view-toggle button:active, .pp-cell:active, .keypad button:active,
+  .qb-cats > button:active .qb-ic, .tabbar .tab:active .ic { transform: none !important; }
+  .btn.is-loading::before { animation: none !important; }
+  .toast, .toast.on { transform: translateX(-50%); }
+}
