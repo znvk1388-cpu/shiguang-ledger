@@ -328,3 +328,7 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   .btn.is-loading::before { animation: none !important; }
   .toast, .toast.on { transform: translateX(-50%); }
 }
+
+/* 错误留在保存操作旁，数字键盘展开时也无需滚动寻找。 */
+.editor-sheet #edErr { margin:0 0 8px; min-height:0; line-height:1.45; overflow-wrap:anywhere; }
+.editor-sheet #edErr:empty { display:none; }

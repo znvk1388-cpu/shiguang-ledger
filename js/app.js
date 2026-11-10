@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.16'
+  const VERSION = '1.18.17'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -991,11 +991,13 @@ window.App = (function () {
       /* 图表里的金额由渲染层决定是否遮罩，需要重绘一次 */
       refresh()
     })
-    /* Esc 关闭任意弹层（记账弹窗自身也监听，重复调用无副作用） */
+    /* Esc 由当前处理器消费，取消关闭时也不再触发第二次确认。 */
     document.addEventListener('keydown', e => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || e.isComposing || e.keyCode === 229) return
       const sheet = $('#sheet')
-      if (sheet && sheet.classList.contains('on')) UI.closeSheet()
+      if (sheet && sheet.classList.contains('on')) {
+        e.preventDefault(); e.stopImmediatePropagation(); UI.closeSheet()
+      }
     })
   }
 

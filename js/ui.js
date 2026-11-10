@@ -115,6 +115,7 @@ window.UI = (function () {
   else if (motionPreference && motionPreference.addListener) motionPreference.addListener(onMotionPreference)
 
   let sheetReturnFocus = null
+  let sheetBackground = []
   let sheetOpen = false
   let sheetVersion = 0
   let sheetFrame = null
@@ -144,7 +145,12 @@ window.UI = (function () {
     if (editorSaving) return
     const replacing = sheetOpen
     cancelFeedback(sheet)
-    if (!sheetOpen) sheetReturnFocus = document.activeElement
+    if (!sheetOpen) {
+      sheetReturnFocus = document.activeElement
+      sheetBackground = ['#mainView', '#authView'].map(selector => $(selector)).filter(el => el && !el.contains(sheet))
+        .map(el => ({ el, wasInert: el.hasAttribute('inert') }))
+      sheetBackground.forEach(({ el }) => el.setAttribute('inert', ''))
+    }
     sheetOpen = true
     sheetVersion++
     cancelAnimationFrame(sheetFrame)
@@ -187,6 +193,8 @@ window.UI = (function () {
     $('#sheet').classList.remove('on')
     $('#mask').classList.remove('on')
     document.body.classList.remove('sheet-open')
+    sheetBackground.forEach(({ el, wasInert }) => { if (!wasInert) el.removeAttribute('inert') })
+    sheetBackground = []
     if (sheetReturnFocus && sheetReturnFocus.isConnected) sheetReturnFocus.focus({ preventScroll: true })
     $('#sheet').setAttribute('aria-hidden', 'true')
     $('#sheet').setAttribute('inert', '')
@@ -610,8 +618,17 @@ window.UI = (function () {
         return
       }
     }
+    /* 只在提交前仍停留筛选按钮时恢复焦点，不抢走用户异步期间已移开的焦点。 */
+    const active = document.activeElement
+    const focusAttr = active && content.contains(active) && content.dataset.homeContext === context
+      ? ['data-ftype', 'data-facc', 'data-fpanel'].find(name => active.hasAttribute(name)) : null
+    const focusValue = focusAttr ? active.getAttribute(focusAttr) : null
     content.innerHTML = html
     content.dataset.homeContext = context
+    if (focusAttr) {
+      const next = $$('[' + focusAttr + ']', content).find(el => el.getAttribute(focusAttr) === focusValue)
+      if (next) next.focus({ preventScroll: true })
+    }
   }
 
   async function renderHome(st) {
@@ -1080,7 +1097,7 @@ window.UI = (function () {
     const reimbTxt = reimbCents >= 100000 ? F.compactYuan(reimbCents) : F.yuan(reimbCents).replace(/\.00$/, '')
     const reimbAmt = reimbCache.owner === reimbKey() && reimbCache.count ? ' ¥' + reimbTxt : ''
     const chips = types.map(([v, label]) =>
-      '<button class="chip' + (f.type === v ? ' on' : '') + '" data-ftype="' + v + '">' + label + '</button>').join('') +
+      '<button class="chip' + (f.type === v ? ' on' : '') + '" data-ftype="' + v + '" aria-pressed="' + (f.type === v) + '">' + label + '</button>').join('') +
       '<button class="chip" id="reimEntry" title="查看待报销的账目">' + ic('receipt') + ' 待报销' + reimbAmt + '</button>'
     /* 「筛选」是工具不是过滤条件，放进搜索行做图标按钮：
        一是它和「支出/收入/转账」并排本来就不合语义，二是 chips 行在 390px 下会把它挤出卡片右缘 */
@@ -1091,8 +1108,8 @@ window.UI = (function () {
     const accs = S.accounts()
     const accChips = accs.length > 1 && (st.filterOpen || f.accountId)
       ? '<div class="chips" style="margin-top:8px">' +
-        '<button class="chip' + (!f.accountId ? ' on' : '') + '" data-facc="">全部账户</button>' +
-        accs.map(a => '<button class="chip' + (f.accountId === a.id ? ' on' : '') + '" data-facc="' + a.id + '">' + esc(a.icon) + ' ' + esc(a.name) + '</button>').join('') +
+        '<button class="chip' + (!f.accountId ? ' on' : '') + '" data-facc="" aria-pressed="' + !f.accountId + '">全部账户</button>' +
+        accs.map(a => '<button class="chip' + (f.accountId === a.id ? ' on' : '') + '" data-facc="' + a.id + '" aria-pressed="' + (f.accountId === a.id) + '">' + esc(a.icon) + ' ' + esc(a.name) + '</button>').join('') +
         '</div>'
       : ''
     /* 从统计页跳转过来时带着分类筛选，这里给一个可清除的提示 chip */
@@ -2686,7 +2703,7 @@ window.UI = (function () {
       if (!sheetOpen || !$('#edSave')) { document.removeEventListener('keydown', onKey); return }
       if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditor(editing ? txn.id : null) }
-      if (e.key === 'Escape') closeSheet()
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeSheet() }
     }
     if (editorKeyHandler) document.removeEventListener('keydown', editorKeyHandler)
     editorKeyHandler = onKey
@@ -2967,9 +2984,9 @@ window.UI = (function () {
       extraBlock +
       imgBlock +
       '</div>' +
-      '<div class="err" id="edErr" role="alert"></div>' +
       '</div>' +
       '<div class="sheet-foot">' +
+      '<div class="err" id="edErr" role="alert"></div>' +
       /* 全弹层只有一个「保存」。键盘贴着它展开，右下角是「完成」（只收起键盘） */
       '<button class="btn block" id="edSave">' + (editingId ? '保存修改' : '保存') + '</button>' +
       '<div class="keypad-wrap hidden" id="keypadWrap">' +
@@ -3125,11 +3142,12 @@ window.UI = (function () {
 
     /* 备注智能补全：点历史备注直接填，并顺手跑一遍规则 */
     const noteInput = $('#noteInput')
+    const updateNoteLimit = () => {
+      if (!noteInput) return
+      const remaining = Math.max(0, noteInput.maxLength - noteInput.value.length)
+      $('#noteLimit').textContent = remaining <= 20 ? '还可输入 ' + remaining + ' 个字符（表情可能占两个）' : '最多 80 个字符'
+    }
     if (noteInput) {
-      const updateNoteLimit = () => {
-        const remaining = Math.max(0, noteInput.maxLength - noteInput.value.length)
-        $('#noteLimit').textContent = remaining <= 20 ? '还可输入 ' + remaining + ' 个字符（表情可能占两个）' : '最多 80 个字符'
-      }
       updateNoteLimit()
       noteInput.addEventListener('input', updateNoteLimit)
       noteInput.addEventListener('blur', () => {
@@ -3157,10 +3175,17 @@ window.UI = (function () {
         $$('#noteSug .chip').forEach(b => b.addEventListener('click', () => {
           const el = $('#noteInput')
           if (!el) return
+          syncDraftFromInputs()
           el.value = b.getAttribute('data-note')
           draft.note = el.value
           updateNoteLimit()
-          if (!editingId && applySmartRules()) renderEditor(editingId)
+          const hits = editingId ? [] : applySmartRules()
+          if (hits.length) {
+            draft.subOpen = true
+            syncEditorSelection(editingId)
+            const tags = $('#tagInput')
+            if (tags) tags.value = draft.tags
+          }
         }))
       })
     })
@@ -3201,7 +3226,10 @@ window.UI = (function () {
     /* 点金额区才展开键盘：默认收起，让「分类 / 账户 / 保存」都在首屏 */
     const amtBox = $('#amtBox')
     if (amtBox) amtBox.addEventListener('click', () => { if (!editorKpOpen) setKp(true) })
-    amtEl.addEventListener('focus', () => { if (window.innerWidth < 640 && !editorKpOpen) setKp(true) })
+    amtEl.addEventListener('focus', () => {
+      const touch = window.matchMedia && window.matchMedia('(pointer:coarse)').matches
+      if ((window.innerWidth < 640 || touch) && !editorKpOpen) setKp(true)
+    })
     if (kpWrap) setKp(!!editorKpOpen, false)
     $('#editorBody').scrollTop = keepBodyScroll
     if (kp) kp.addEventListener('pointerdown', e => {
@@ -3262,9 +3290,7 @@ window.UI = (function () {
     }
   }
 
-  /* 校验失败必须「看得见」：原来 #edErr 在表单最末尾（moreBox 之后），
-     弹层滚到中间时完全看不到，用户以为「点了保存没反应」。
-     现在同时做三件事：toast 提示 + 滚到出错字段 + 字段红框。 */
+  /* 校验失败在保存操作旁保留说明，同时提示、定位字段并标记红框。 */
   function edFail(msg, fieldId) {
     const err = $('#edErr')
     if (err) err.textContent = msg
@@ -3365,6 +3391,7 @@ window.UI = (function () {
     const reimbOwner = reimbKey()
     editorSaving = true
     btn.disabled = true
+    $('#edErr').textContent = ''
     btn.textContent = '保存中…'
     btn.classList.add('is-loading')
     btn.setAttribute('aria-busy', 'true')
