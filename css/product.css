@@ -332,3 +332,6 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 /* 错误留在保存操作旁，数字键盘展开时也无需滚动寻找。 */
 .editor-sheet #edErr { margin:0 0 8px; min-height:0; line-height:1.45; overflow-wrap:anywhere; }
 .editor-sheet #edErr:empty { display:none; }
+
+/* 表单存在待处理错误时，短时通知让位于持续失败说明。 */
+.editor-sheet.on:has(#edErr:not(:empty)) ~ .toast { visibility:hidden; }
