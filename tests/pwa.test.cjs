@@ -112,10 +112,15 @@ test('all precached files exist and activation removes only old app versions', a
   w.handlers.get('install')({ waitUntil(p) { pending = p } })
   await pending
   for (const url of w.downloaded) assert.ok(fs.existsSync(path.join(root, url)), url)
+  const before = [...w.cacheNames]
+  const current = /const CACHE = '([^']+)'/.exec(read('sw.js'))[1]
   w.handlers.get('activate')({ waitUntil(p) { pending = p } })
   await pending
-  assert.deepEqual(w.deleted, ['ledger10-v41', 'ledger10-v42', 'ledger10-v43', 'ledger10-v44', 'ledger10-v45', 'ledger10-v46', 'ledger10-v47', 'ledger10-v48', 'ledger10-v49', 'ledger10-v50', 'ledger10-v51', 'ledger10-v52', 'ledger10-v53', 'ledger10-v54', 'ledger10-v55', 'ledger10-v56', 'ledger10-v57', 'ledger10-v58'])
-  assert.equal(w.cacheNames.has('ledger10-v59'), true)
+  /* 原来这里硬编码 ledger10-v41…v59，版本号一改断言就失效（正是 B6 要解决的脆性）。
+     改成「删掉所有旧 ledger10-* 缓存，保留当前版本与非本应用缓存」。 */
+  const expectDeleted = before.filter(k => k.startsWith('ledger10-') && k !== current).sort()
+  assert.deepEqual(w.deleted.slice().sort(), expectDeleted)
+  assert.equal(w.cacheNames.has(current), true)
   assert.equal(w.cacheNames.has('another-app'), true)
   assert.equal(w.claimed(), true)
 })

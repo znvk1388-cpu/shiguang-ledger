@@ -217,6 +217,72 @@ window.Fmt = (function () {
     return dstr(base)
   }
 
+  /* 统一确认入口的兜底实现（B5）
+     ------------------------------------------------------------------
+     正式实现是 ui.js 里的 confirmSheet（弹层 + inert 隔离 + 焦点还原），
+     它会覆盖这里的版本。放在 format.js 的原因：format.js 是所有模块的
+     共同依赖，也是只加载数据层、不加载 UI 的单元测试里唯一必在的文件 ——
+     没有它，vault/wealth 这类模块里的确认调用会直接 ReferenceError。
+     兜底版本退回原生 confirm，行为与旧代码完全一致。 */
+  if (typeof window !== 'undefined' && !window.confirmSheet) {
+    window.confirmSheet = function (opt) {
+      const o = typeof opt === 'string' ? { body: opt } : (opt || {})
+      const text = String(o.body || o.title || '')
+      try { return Promise.resolve(typeof confirm === 'function' ? !!confirm(text) : false) } catch (e) { return Promise.resolve(false) }
+    }
+  }
+
+  /* ---------- 在线汇率（D4，显式触发） ----------
+     只在用户点「从网络更新汇率」时联网，不做后台轮询、不在启动时偷偷请求：
+     记账的核心路径不能依赖第三方服务的可用性，离线时必须一切照旧。
+     接口用免密钥的公开汇率服务，请求只带基准币种代码，不带任何账目信息。 */
+  const RATE_API = 'https://open.er-api.com/v6/latest/'
+  const FX_AT_KEY = 'ledger10_fx_at'
+
+  async function fetchRates() {
+    if (typeof fetch !== 'function') throw new Error('当前环境不支持联网获取汇率')
+    let res = null
+    try {
+      res = await fetch(RATE_API + 'CNY', { headers: { Accept: 'application/json' } })
+    } catch (e) {
+      throw new Error('网络不可用，未能获取汇率')
+    }
+    if (!res || !res.ok) throw new Error('汇率服务暂时不可用（' + (res ? res.status : '无响应') + '）')
+    let json = null
+    try { json = await res.json() } catch (e) { throw new Error('汇率服务返回格式异常') }
+    if (!json || json.result !== 'success' || !json.rates) throw new Error('汇率服务返回的数据不可用')
+    /* 接口给的是「1 CNY = ? 外币」，本应用存的是「1 外币 = ? CNY」，取倒数 */
+    const rates = { CNY: 1 }
+    CURRENCIES.forEach(c => {
+      if (c.code === 'CNY') return
+      const per = Number(json.rates[c.code])
+      if (isFinite(per) && per > 0) rates[c.code] = Math.round((1 / per) * 1e6) / 1e6
+    })
+    const updatedAt = json.time_last_update_unix
+      ? new Date(Number(json.time_last_update_unix) * 1000).toISOString()
+      : iso(new Date())
+    return { rates, updatedAt, source: 'open.er-api.com' }
+  }
+
+  function fxUpdatedAt() {
+    try { return localStorage.getItem(FX_AT_KEY) || '' } catch (e) { return '' }
+  }
+
+  /* 一次性写入整批汇率：逐条 setFxRate 会把 JSON 序列化 11 次，这里合成一次 */
+  function applyRates(pack) {
+    const r = (pack && pack.rates) || {}
+    let saved = {}
+    try { saved = JSON.parse(localStorage.getItem(FX_KEY) || '{}') || {} } catch (e) { saved = {} }
+    Object.keys(r).forEach(code => {
+      const v = Number(r[code])
+      if (isFinite(v) && v > 0) saved[code] = v
+    })
+    try { localStorage.setItem(FX_KEY, JSON.stringify(saved)) } catch (e) { /* 忽略 */ }
+    try { localStorage.setItem(FX_AT_KEY, (pack && pack.updatedAt) || iso(new Date())) } catch (e) { /* 忽略 */ }
+    _fxCache = null
+  }
+
   return { toCents, yuan, money, moneySym, pad2, dstr, dtstr, localInput, parseInput, parseIso, isoLocal, isoDay, monthKey, monthOf, monthStart, monthEnd, iso, humanDay, bytes, escapeHtml, privacy, moneyText, compactYuan, nextDue, ymdLocal,
-    CURRENCIES, FX_DEFAULT, baseCurrency, setBaseCurrency, fxRates, setFxRate, resetFxRates, rateOf, currencySym, toBase, hasForeign }
+    CURRENCIES, FX_DEFAULT, baseCurrency, setBaseCurrency, fxRates, setFxRate, resetFxRates, rateOf, currencySym, toBase, hasForeign,
+    fetchRates, fxUpdatedAt, applyRates }
 })()

@@ -112,7 +112,7 @@ window.Wealth = (function () {
     document.querySelectorAll('#sheet [data-ddel]').forEach(b =>
       b.addEventListener('click', async () => {
         const id = Number(b.getAttribute('data-ddel'))
-        if (!confirm('删除这笔借贷？相关转账记录会保留在账目里，需要的话请到明细里单独处理。')) return
+        if (!(await confirmSheet({ title: '删除借贷', danger: true, okText: '删除', body: '删除这笔借贷？相关转账记录会保留在账目里，需要的话请到明细里单独处理。' }))) return
         try {
           await S.deleteAccount(id)
           clearDebtMeta(id)
@@ -302,7 +302,7 @@ window.Wealth = (function () {
           err.textContent = '账户余额或信息已变化，请关闭后重新对账。'
           return
         }
-        if (!confirm('将修改期初余额并影响历史余额。请先检查漏记或重复账目，确定继续校准？')) return
+        if (!(await confirmSheet({ title: '校准期初余额', danger: true, okText: '校准', body: '将修改期初余额并影响历史余额。请先检查漏记或重复账目，确定继续校准？' }))) return
         const newInit = originalInitial + diff
         await S.updateAccount(a.id, { initial_balance: newInit / 100 })
         const lg = readJson(RECON_LOG, [])
@@ -620,8 +620,8 @@ window.Wealth = (function () {
       openCardSheet()
       window.App.refresh()
     })
-    document.getElementById('ceClear').addEventListener('click', () => {
-      if (!confirm('清除这张卡的额度与账单日信息？（账目不受影响）')) return
+    document.getElementById('ceClear').addEventListener('click', async () => {
+      if (!(await confirmSheet({ title: '清除卡片信息', danger: true, okText: '清除', body: '清除这张卡的额度与账单日信息？（账目不受影响）' }))) return
       clearCardMeta(accountId)
       U().closeSheet()
       U().toast('已清除')

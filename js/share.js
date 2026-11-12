@@ -776,7 +776,7 @@ window.Share = (function () {
       openShareCenter()
     }))
     document.querySelectorAll('#sheet [data-shrev]').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('撤回后，拿到共享码的人将无法再刷新。确定撤回？')) return
+      if (!(await confirmSheet({ title: '撤回分享', danger: true, okText: '撤回', body: '撤回后，拿到共享码的人将无法再刷新。确定撤回？' }))) return
       const r = await revoke(b.getAttribute('data-shrev'))
       if (r.error) { U().toast(r.error); return }
       U().toast('已撤回')

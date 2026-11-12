@@ -501,8 +501,8 @@ window.Smart = (function () {
       })
     })
     const cfClear = document.getElementById('cfClear')
-    if (cfClear) cfClear.addEventListener('click', () => {
-      if (!confirm('清空全部纠正记忆？之后不再自动套用你改过的分类。')) return
+    if (cfClear) cfClear.addEventListener('click', async () => {
+      if (!(await confirmSheet({ title: '清空纠正记忆', danger: true, okText: '清空', body: '清空全部纠正记忆？之后不再自动套用你改过的分类。' }))) return
       clearCatFixes()
       U().toast('已清空纠正记忆')
       openRuleManager()

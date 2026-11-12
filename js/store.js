@@ -23,6 +23,15 @@ window.Store = (function () {
      fetchAll 也会按「实际返回条数」推进游标，不会漏行。 */
   const PAGE = 1000
 
+  /* 一次读全量的硬上限（导出 / 备份 / 报表共用）。
+     超过就必须报错而不是截断：账目少了但没人知道，比功能不可用更严重。 */
+  const ROW_CAP = 100000
+  function tooManyRows() {
+    const e = new Error('账目数量超过 ' + ROW_CAP + ' 条，本次读取不完整，请缩小范围后重试')
+    e.code = 'TOO_MANY_ROWS'
+    return e
+  }
+
   /* 幂等标记：写在 tags 数组里的 `_op:<操作ID>`。
      服务端没有开放改表（无 DDL 工具），所以用行内标记实现
      「同一操作重复提交只落一条」，并且只对带 tags 的表生效。 */
@@ -268,6 +277,15 @@ window.Store = (function () {
     await loadCategories()
     return rows[0]
   }
+  /* 分类改名/换图标/换色（B1）。以前只能新增，名字打错就永久错着，
+     是和钱迹/随手记差距最直观的一处。父分类用 parent_id 表达，不在这里改层级。 */
+  async function updateCategory(id, patch) {
+    const p = Object.assign({}, patch)
+    delete p.id
+    delete p.created_at
+    mustAffect(unwrap(await db().from('categories').update(p).eq('id', id).select()), '修改分类')
+    await loadCategories()
+  }
   async function deleteCategory(id) {
     mustAffect(unwrap(await db().from('categories').delete().eq('id', id).select()), '删除分类')
     await loadCategories()
@@ -336,6 +354,10 @@ window.Store = (function () {
       from += got                            /* 按实际返回条数推进，不受服务端上限影响 */
       if (total && from >= total) break
     }
+    /* 调用方要「全部」（limit 顶到上限）但库里还有更多 —— 这时返回的行是残缺的。
+       以前这种情况会静默截断，导出的 CSV / 报表会少数据而用户毫不知情，
+       比直接报错糟糕得多，所以这里必须抛出去。 */
+    if (want >= ROW_CAP && total > rows.length) throw tooManyRows()
     return { rows: rows.slice(0, want), total: total || rows.length }
   }
 
@@ -776,9 +798,22 @@ window.Store = (function () {
     return { count: rows.length, bytes: total }
   }
 
-  /* 导出全部（CSV 用） */
+  /* 导出全部（CSV 用）。
+     注意：listTransactions 在超过 ROW_CAP 时会抛 TOO_MANY_ROWS，
+     这里换成对用户有意义的说法（告诉他怎么办），而不是把内部错误透出去。 */
   async function exportAll() {
-    const { rows } = await listTransactions({ limit: 100000 })
+    let res
+    try {
+      res = await listTransactions({ limit: ROW_CAP })
+    } catch (e) {
+      if (e && e.code === 'TOO_MANY_ROWS') {
+        const err = new Error('账目已超过 ' + ROW_CAP + ' 条，无法一次性导出 CSV；请按年份分批导出（统计 → 年度 → 导出）。')
+        err.code = 'TOO_MANY_ROWS'
+        throw err
+      }
+      throw e
+    }
+    const rows = res.rows
     const atts = await listAttachments(rows.map(r => r.id))
     return rows.map(r => {
       const c = r.category_id ? category(r.category_id) : null
@@ -837,7 +872,7 @@ window.Store = (function () {
   return {
     state, init, seedPresets,
     accounts, allAccounts, accountName, categoryName, category, rootCategories, childCategories,
-    addAccount, updateAccount, deleteAccount, addCategory, deleteCategory,
+    addAccount, updateAccount, deleteAccount, addCategory, updateCategory, deleteCategory,
     listTransactions, getTransaction, addTransaction, updateTransaction, deleteTransaction,
     restoreTransaction, purgeTransaction, listTemplates, addTemplate, updateTemplate, deleteTemplate,
     listAttachments, addAttachments, removeAttachment, uploadImage, uploadImageBlob, imageUrl, compressImage,

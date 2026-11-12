@@ -311,6 +311,39 @@ input, select, textarea { outline: none; }
 .amt.transfer { color: var(--transfer); }
 .thumb { width: 22px; height: 22px; border-radius: var(--r-sm); object-fit: cover; border: 1px solid var(--line); }
 
+/* ---------- 批量编辑（B3） ---------- */
+/* 多选态：行首一个 20×20 勾选位，选中行整行染色。
+   注意用 inset 阴影而不是 border 做选中框，避免行高跳变导致列表抖动。 */
+.txn .pick-box {
+  width: 20px; height: 20px; flex: none; border-radius: 50%;
+  border: 1.5px solid var(--line); color: #fff; display: grid; place-items: center;
+  font-size: 12px; line-height: 1; transition: background .12s, border-color .12s;
+}
+.txn .pick-box.on { background: var(--brand); border-color: var(--brand); }
+.txn.pick { cursor: pointer; }
+.txn.sel { background: var(--brand-soft); }
+.txn.sel:active { background: var(--brand-soft); }
+
+/* 底部批量操作条：压在 tabbar 之上，安全区一起算进去 */
+.batch-bar {
+  position: fixed; left: 0; right: 0; bottom: calc(56px + var(--safe-b));
+  z-index: 45; display: none; gap: 8px; flex-direction: column;
+  padding: 10px 14px; background: var(--card);
+  border-top: 1px solid var(--line); box-shadow: 0 -6px 22px rgba(18,26,46,.10);
+}
+.batch-bar.on { display: flex; }
+.batch-bar .batch-count { font-size: var(--fs-meta); color: var(--sub); }
+.batch-bar .batch-count b { color: var(--text); }
+.batch-bar .batch-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.batch-bar .batch-acts .btn { flex: 1 1 auto; min-height: 40px; }
+@media (min-width: 721px) {
+  .batch-bar { left: 0; right: 0; margin: 0 auto; max-width: 720px; border-radius: var(--r-md) var(--r-md) 0 0; }
+}
+/* 宽屏是左侧导航，没有底部 tabbar，操作条直接贴底 */
+@media (min-width: 1280px) and (min-height: 560px) {
+  .batch-bar { bottom: 0; max-width: none; left: 220px; border-radius: 0; }
+}
+
 .empty { text-align: center; padding: 48px 20px; color: var(--sub); }
 .empty .big { font-size: var(--fs-graphic); margin-bottom: 10px; }
 
@@ -1073,6 +1106,12 @@ html[data-theme="dark"] .callout--ok p { color: #bfe3c9; }
 /* 我的页分组标题（P1-5） */
 .grp-title { font-size: var(--fs-meta); font-weight: 600; color: var(--sub); padding: 16px 6px 7px; letter-spacing: .02em; }
 .me-group:first-of-type .grp-title { padding-top: 6px; }
+/* 可折叠的「我的」分组（C4）：标题行即开关，箭头提示可展开 */
+.me-fold { margin-bottom: 12px; }
+.me-fold > summary { cursor: pointer; padding: 2px 6px 6px; }
+.me-fold > summary::-webkit-details-marker { display: none; }
+.me-fold > summary::after { content: '▸'; float: right; color: var(--sub); font-size: var(--fs-meta); }
+.me-fold[open] > summary::after { content: '▾'; }
 .me-adv { margin-top: 14px; }
 .me-adv > summary { font-size: var(--fs-meta); color: var(--sub); padding: 8px 6px; cursor: pointer; list-style: none; }
 .me-adv > summary::-webkit-details-marker { display: none; }

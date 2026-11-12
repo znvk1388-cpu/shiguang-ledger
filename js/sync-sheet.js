@@ -233,7 +233,7 @@ window.SyncSheet = (function () {
     })
     const dl = document.getElementById('syDropLegacy')
     if (dl) dl.addEventListener('click', async () => {
-      if (!confirm('确定丢弃全部旧版本遗留的待上传记录？这些操作将不会被上传。')) return
+      if (!(await confirmSheet({ title: '丢弃遗留记录', danger: true, okText: '丢弃', body: '确定丢弃全部旧版本遗留的待上传记录？这些操作将不会被上传。' }))) return
       Sync().clearLegacy()
       await open()
       window.UI.toast('已丢弃旧版遗留记录')
@@ -242,7 +242,7 @@ window.SyncSheet = (function () {
     /* 清理本机游客数据：唯一会真正删数据的入口，二次确认 */
     const cg = document.getElementById('syCleanGuest')
     if (cg) cg.addEventListener('click', async () => {
-      if (!confirm('清理后本机游客数据将永久删除（云端副本不受影响）。确定继续？')) return
+      if (!(await confirmSheet({ title: '清理本机游客数据', danger: true, okText: '永久删除', body: '清理后本机游客数据将永久删除（云端副本不受影响）。确定继续？' }))) return
       try {
         const M = await window.Lazy.need('migrate')
         await M.cleanGuestData()

@@ -36,7 +36,7 @@ window.Sync = (function () {
 
   const WRITES = [
     'addTransaction', 'updateTransaction', 'deleteTransaction', 'restoreTransaction', 'purgeTransaction',
-    'addAccount', 'updateAccount', 'deleteAccount', 'addCategory', 'deleteCategory',
+    'addAccount', 'updateAccount', 'deleteAccount', 'addCategory', 'updateCategory', 'deleteCategory',
     'addBook', 'renameBook', 'deleteBook',
     'setBudget', 'addGoal', 'updateGoal', 'deleteGoal', 'goalDeposit',
     'addRecurring', 'updateRecurring', 'deleteRecurring',
@@ -54,7 +54,7 @@ window.Sync = (function () {
     addTransaction: '新增账目', updateTransaction: '修改账目', deleteTransaction: '删除账目',
     restoreTransaction: '恢复账目', purgeTransaction: '彻底删除账目',
     addAccount: '新增账户', updateAccount: '修改账户', deleteAccount: '删除账户',
-    addCategory: '新增分类', deleteCategory: '删除分类',
+    addCategory: '新增分类', updateCategory: '修改分类', deleteCategory: '删除分类',
     addBook: '新增账本', renameBook: '重命名账本', deleteBook: '删除账本',
     setBudget: '设置预算', addGoal: '新增目标', updateGoal: '修改目标', deleteGoal: '删除目标', goalDeposit: '目标存入',
     addRecurring: '新增周期规则', updateRecurring: '修改周期规则', deleteRecurring: '删除周期规则',

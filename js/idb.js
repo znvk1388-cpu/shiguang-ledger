@@ -1,8 +1,11 @@
 /* 极简 IndexedDB 封装：游客模式的本地数据层 */
 window.Idb = (function () {
   const DB_NAME = 'ledger10-guest'
-  const VERSION = 4
-  const STORES = ['accounts', 'categories', 'transactions', 'attachments', 'budgets', 'recurring', 'books', 'goals', 'templates', 'metadata']
+  /* v5：新增 overlays 表（本机覆盖层的镜像，见 js/overlay.js）。
+     表名进 STORES 后 replaceAll 的校验与恢复备份的理解都不用改 —— 它按 map 里的
+     键名取表，overlays 不在备份 map 里就天然不会被「恢复」清掉。 */
+  const VERSION = 5
+  const STORES = ['accounts', 'categories', 'transactions', 'attachments', 'budgets', 'recurring', 'books', 'goals', 'templates', 'metadata', 'overlays']
   let dbPromise = null
 
   function open() {

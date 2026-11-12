@@ -57,6 +57,9 @@ window.GuestStore = (function () {
      任何写入（新增/修改/软删/恢复/清空/导入）立即失效。
      行数超过 2 万就不缓存，避免大账本吃内存。 */
   const CACHE_MAX = 20000
+  /* 一次读全量的硬上限：与云端 store.js 的 ROW_CAP 保持一致，
+     超过时报错而不是切片截断（截断会让导出的 CSV 静默少数据）。 */
+  const ROW_CAP = 100000
   let txnCache = null
   function invalidateTxnCache() { txnCache = null }
   async function allTxns() {
@@ -240,6 +243,17 @@ window.GuestStore = (function () {
     state.categories.push(c)
     return c
   }
+  /* 与云端 updateCategory 对齐：只改可改字段，id/created_at 不接受外部覆盖 */
+  async function updateCategory(id, patch) {
+    const c = state.categories.find(x => String(x.id) === String(id))
+    if (!c) return null
+    const p = Object.assign({}, patch)
+    delete p.id
+    delete p.created_at
+    Object.assign(c, p)
+    await idb.put('categories', c)
+    return c
+  }
   async function deleteCategory(id) {
     await idb.del('categories', id)
     state.categories = state.categories.filter(x => x.id !== id)
@@ -293,6 +307,13 @@ window.GuestStore = (function () {
     const total = rows.length
     const limit = o.limit || 200
     const offset = o.offset || 0
+    /* 与云端 listTransactions 对齐：调用方要「全部」却撞到上限时抛错而不是静默截断。
+       游客端以前直接切片，导出的 CSV 少数据也没人知道。 */
+    if (limit >= ROW_CAP && total > offset + limit) {
+      const e = new Error('账目数量超过 ' + ROW_CAP + ' 条，本次读取不完整，请缩小范围后重试')
+      e.code = 'TOO_MANY_ROWS'
+      throw e
+    }
     return { rows: rows.slice(offset, offset + limit), total }
   }
 
@@ -663,7 +684,18 @@ window.GuestStore = (function () {
 
   /* ---------- 导出 / 迁移 ---------- */
   async function exportAll() {
-    const { rows } = await listTransactions({ limit: 100000 })
+    let res
+    try {
+      res = await listTransactions({ limit: ROW_CAP })
+    } catch (e) {
+      if (e && e.code === 'TOO_MANY_ROWS') {
+        const err = new Error('账目已超过 ' + ROW_CAP + ' 条，无法一次性导出 CSV；请按年份分批导出（统计 → 年度 → 导出）。')
+        err.code = 'TOO_MANY_ROWS'
+        throw err
+      }
+      throw e
+    }
+    const rows = res.rows
     const atts = await listAttachments(rows.map(r => r.id))
     return rows.map(r => {
       const c = r.category_id ? category(r.category_id) : null
@@ -859,7 +891,7 @@ window.GuestStore = (function () {
   return {
     state, init, seedPresets, sourceId,
     accounts, allAccounts, accountName, categoryName, category, rootCategories, childCategories, listAllAttachments, uploadFile,
-    addAccount, updateAccount, deleteAccount, addCategory, deleteCategory,
+    addAccount, updateAccount, deleteAccount, addCategory, updateCategory, deleteCategory,
     listTransactions, getTransaction, addTransaction, updateTransaction, deleteTransaction,
     restoreTransaction, purgeTransaction, listTemplates, addTemplate, updateTemplate, deleteTemplate,
     listAttachments, addAttachments, removeAttachment, uploadImage, imageUrl,

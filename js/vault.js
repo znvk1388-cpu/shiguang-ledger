@@ -319,7 +319,8 @@ window.Vault = (function () {
     if (got.snap && got.snap.kind === 'guest-full-v1') {
       if (!window.DB || window.DB.mode !== 'guest' || !window.GuestStore) return { error: '这份完整游客备份需要在游客模式恢复，请先切换游客模式' }
       const sourceId = window.GuestStore.state.sourceId
-      if (!confirm('此完整游客备份会替换当前设备上的游客账本、图片和规则，不能合并。请先备份当前数据。确定继续？')) return { error: '已取消恢复，当前数据未改动' }
+      if (!(await confirmSheet({ title: '恢复完整游客备份', danger: true, okText: '替换恢复',
+        body: '此完整游客备份会替换当前设备上的游客账本、图片和规则，不能合并。请先备份当前数据。确定继续？' }))) return { error: '已取消恢复，当前数据未改动' }
       try {
         const result = await window.GuestStore.restore(got.snap.backup, {
           isActive: () => window.DB.mode === 'guest' && window.GuestStore.state.sourceId === sourceId,
@@ -411,7 +412,33 @@ window.Vault = (function () {
       '<p class="small" style="margin:0 0 10px">' + esc(v[2]) + '</p>' +
       '<div class="row" style="gap:8px"><button class="btn grow" id="bkLocal">' + esc(v[3]) + '</button>' +
       (isGuest ? '<button class="btn line grow" id="bkLogin">' + ic('cloud') + ' 登录账号</button>' : '') +
-      '</div></div>'
+      '</div>' +
+      persistLine() + attachLine(isGuest) +
+      '</div>'
+  }
+
+  /* 本机存储授权状态（A1）：false 意味着浏览器随时可能清掉账目，
+     这是游客模式最大的隐性风险，必须明说而不是藏在文档里。 */
+  function persistLine() {
+    const ps = window.DB && window.DB.persistState ? window.DB.persistState() : null
+    if (ps === true) {
+      return '<div class="tiny muted" style="margin-top:10px">' + ic('check') + ' 本机存储已获持久化授权，浏览器不会自动清理</div>'
+    }
+    if (ps === false) {
+      return '<div class="tiny" style="margin-top:10px;color:var(--expense)">' +
+        '本机存储未获持久化授权：手机空间紧张时，浏览器可能整站清掉你的账目。' +
+        '<button class="btn sm line" id="bkPersist" style="margin-left:6px">重试申请</button></div>'
+    }
+    return '<div class="tiny muted" style="margin-top:10px">正在检测本机存储授权…</div>'
+  }
+
+  /* 账目备份与凭证图片是两件事（A5）：JSON 备份不含图片文件，
+     分开列两行，用户才不会以为自己「全都备好了」。 */
+  function attachLine(isGuest) {
+    if (isGuest) {
+      return '<div class="tiny muted" style="margin-top:6px">' + ic('image') + ' 凭证图片：随本机 JSON 备份一起导出（图片以 data URL 内联）</div>'
+    }
+    return '<div class="tiny muted" style="margin-top:6px">' + ic('image') + ' 凭证图片：存在云端存储，<b>不进</b> JSON 备份；请用「加密备份到云端」或在本机另存原件</div>'
   }
 
   /* 当前访问地址展示（放懒加载里省首屏体积）。selector 指向容器元素。 */
@@ -580,7 +607,8 @@ window.Vault = (function () {
       '<div class="sheet-head"><span class="sheet-title">导出加密文件到本机</span>' +
       '<button id="vlClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin:4px 0 10px">' +
-      '游客备份包含账目、图片和周期规则，不含本机偏好设置；登录模式快照不含图片凭证、周期规则和模板。文件可保存到设备或自己的网盘。' +
+      '游客备份包含账目、图片和周期规则；登录模式快照不含图片凭证、周期规则和模板。文件可保存到设备或自己的网盘。' +
+      '报销进度、对账标记、预算结转这类本机设置走「JSON 备份 / 恢复」，不在加密快照里。' +
       '文件在本机加密生成；登录模式打包时需要读取云端数据，口令不会上传。' +
       '</div>' + banner
 
@@ -672,7 +700,7 @@ window.Vault = (function () {
       if (!file0) { renderLocal('请先选择备份文件', 'err'); return }
       /* 恢复不校验长度：老备份可能是 6~7 位口令创建的，能解密就行 */
       if (!String(pass)) { renderLocal('请输入该备份的口令', 'err'); return }
-      if (!confirm('将先解密并检查备份；游客完整备份在替换前会再次询问。确定继续？')) return
+      if (!(await confirmSheet({ title: '恢复备份', okText: '继续', body: '将先解密并检查备份；游客完整备份在替换前会再次询问。确定继续？' }))) return
       restoreBtn.disabled = true
       let r
       try { r = await restoreLocal(file0, pass) }
@@ -721,6 +749,16 @@ window.Vault = (function () {
       syncHubRow('shSync', '' + ic('refresh') + '', '同步状态与冲突', '连接状态 · 待上传 · 冲突检查', '') +
       '</div>' +
       '<div id="shStatus"></div>' +
+      /* 加密范围披露（B2）：日常云同步是明文，只有备份文件是端到端加密。
+         这是刻意的架构取舍（明文才能做服务端搜索与统计聚合），
+         但用户默认以为「云端 = 加密」，所以必须写清楚，而不是留在代码注释里。 */
+      '<div class="card"><div class="help-sec"><h4>加密范围（重要）</h4>' +
+      '<p class="muted"><b>日常云同步：明文。</b>登录后账目以明文行存在云端数据库，' +
+      '平台运维层面可读取，这也是跨设备同步、服务端统计与搜索能正常工作的前提。</p>' +
+      '<p class="muted"><b>备份文件：端到端加密。</b>「加密备份到云端」与「导出加密文件到本机」都会在' +
+      '本机用 PBKDF2 + AES-GCM 加密，口令不上传，服务端只存密文；口令丢失则无法恢复。</p>' +
+      '<p class="muted">因此：<b>特别敏感的备注不建议写在账目里</b>；真要留档，请导出一份加密文件自己保管。</p>' +
+      '</div></div>' +
       /* 访问入口能力边界说明：用户最容易困惑的地方，一次讲清 */
       '<div class="card"><div class="help-sec"><h4>访问入口说明</h4>' +
       '<p class="muted"><b>平台地址</b>：支持登录、账号隔离、跨设备同步、AI 记账、共享账本 —— 日常就用它。' +
@@ -747,12 +785,26 @@ window.Vault = (function () {
     const sy = document.getElementById('shSync')
     if (sy) sy.addEventListener('click', () => { U().closeSheet(); if (window.Sync) window.Sync.openCenter() })
     const box = document.getElementById('shStatus')
-    if (box) box.innerHTML = statusCardHtml()
+    renderStatus(box)
     addrHtml('#shAddr')
+  }
+
+  /* 状态卡渲染 + 事件绑定单独抽出来，是给「重试申请持久化」用：
+     申请完要就地刷新卡片，不能重开整个面板（会丢滚动位置）。 */
+  function renderStatus(box) {
+    if (!box) return
+    box.innerHTML = statusCardHtml()
     const b = document.getElementById('bkLocal')
     if (b) b.addEventListener('click', () => { U().closeSheet(); openLocalSheet() })
     const bl = document.getElementById('bkLogin')
     if (bl) bl.addEventListener('click', () => { U().closeSheet(); window.App.backToAuth() })
+    const bp = document.getElementById('bkPersist')
+    if (bp) bp.addEventListener('click', async () => {
+      bp.disabled = true
+      bp.textContent = '申请中…'
+      await window.DB.ensurePersisted()
+      renderStatus(box)
+    })
   }
 
 

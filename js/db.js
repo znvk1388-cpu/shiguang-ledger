@@ -7,7 +7,7 @@ window.DB = (function () {
   const METHODS = [
     'init', 'seedPresets',
     'accounts', 'allAccounts', 'accountName', 'categoryName', 'category', 'rootCategories', 'childCategories',
-    'addAccount', 'updateAccount', 'deleteAccount', 'addCategory', 'deleteCategory',
+    'addAccount', 'updateAccount', 'deleteAccount', 'addCategory', 'updateCategory', 'deleteCategory',
     'listTransactions', 'getTransaction', 'addTransaction', 'updateTransaction', 'deleteTransaction',
     'restoreTransaction', 'purgeTransaction', 'listTemplates', 'addTemplate', 'updateTemplate', 'deleteTemplate',
     'listAttachments', 'addAttachments', 'removeAttachment', 'uploadImage', 'imageUrl',
@@ -30,15 +30,38 @@ window.DB = (function () {
   api.hasOp = function () { return backend.hasOp ? backend.hasOp.apply(backend, arguments) : Promise.resolve(false) }
   api.opTag = function (id) { return backend.opTag ? backend.opTag(id) : ('_op:' + id) }
 
+  /* 本机存储持久化（A1）
+     ------------------------------------------------------------------
+     游客模式下账目全在 IndexedDB 里，而浏览器在磁盘紧张时会「按需清理」
+     整个站点的存储，且不给任何提示。persist() 只是「申请」，是否授予由
+     浏览器按站点互动度决定；这里只负责申请并把结果记下来，
+     交给「我的 → 备份状态卡」显示，让用户知道自己是不是处于可被清理的状态。 */
+  let persisted = null
+  async function ensurePersisted() {
+    try {
+      const sm = typeof navigator !== 'undefined' ? navigator.storage : null
+      if (!sm || typeof sm.persist !== 'function') { persisted = false; return persisted }
+      if (typeof sm.persisted === 'function') {
+        try { if (await sm.persisted()) { persisted = true; return persisted } } catch (e) { /* 继续尝试申请 */ }
+      }
+      persisted = !!(await sm.persist())
+    } catch (e) { persisted = false }
+    return persisted
+  }
+  api.persistState = function () { return persisted }
+  api.ensurePersisted = ensurePersisted
+
   function useGuest() {
     backend = window.GuestStore
     api.mode = 'guest'
+    ensurePersisted()          /* 不阻塞启动；失败也不影响记账 */
     return backend.init()
   }
 
   async function useCloud(session) {
     backend = window.Store
     api.mode = 'cloud'
+    ensurePersisted()          /* 云端模式也有一份本机缓存，顺手申请 */
     await backend.init(session.user.id)
   }
 

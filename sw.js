@@ -1,5 +1,8 @@
 /* 拾光记账 · 离线缓存（仅缓存应用静态资源，云端数据请求直连） */
-const CACHE = 'ledger10-v59'
+/* CACHE 由 `npm run stamp`（tools/sw-version.mjs）按全部静态资源的哈希自动写入。
+   不要手改这一行：tests/sw-version.test.cjs 会校验它与当前文件内容一致，
+   忘记重新盖章会直接测试失败 —— 手改版本号漏改导致线上跑旧资源的老问题就这么封住了。 */
+const CACHE = 'ledger10-1a736f8e35d9'
 
 /* 首屏必需：index.html 里 <script defer> 引的那些 + 样式 + 图标。
    串行安装时按这个顺序先装，中途断网也能离线启动。 */
@@ -9,7 +12,8 @@ const CORE_SHELL = [
   './manifest.json',
   './css/app.css', './css/product.css', './assets/icons.svg', './icon-192.png', './icon-512.png',
   './js/vendor/workbuddy-cloud-sdk.js',
-  './js/config.js', './js/env.js', './js/cloud.js', './js/format.js', './js/idb.js', './js/store.js',
+  './js/config.js', './js/env.js', './js/cloud.js', './js/format.js', './js/idb.js',
+  './js/overlay.js', './js/store.js',
   './js/guest-store.js', './js/db.js', './js/sync.js', './js/lazy.js', './js/product.js',
   './js/ui.js', './js/app.js',
 ]
@@ -34,11 +38,14 @@ const STATIC_URLS = new Set(CORE.map(u => new URL(u, self.location.href).href))
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE)
-    /* 串行下载，避免抢占首屏带宽。任何必需资源失败都让安装失败，
-       浏览器继续保留旧 worker 和旧缓存；不把不完整的新版本标为已就绪。
-       清理旧缓存只发生在完整安装后的 activate。 */
-    for (const u of CORE) {
-      await cache.add(new Request(u, { cache: 'reload' }))
+    /* 并发 5 路预缓存（B6）：原来 40+ 个文件串行 cache.add，弱网下安装要等很久，
+       这段时间用户既拿不到离线能力、也可能直接关掉页面。
+       并发 5 明显缩短安装时间，又不至于把首屏带宽抢光。
+       任何必需资源失败仍然让整个安装失败 —— 浏览器继续保留旧 worker 与旧缓存，
+       不把不完整的新版本标为已就绪；旧缓存清理只发生在完整安装后的 activate。 */
+    const CONCURRENCY = 5
+    for (let i = 0; i < CORE.length; i += CONCURRENCY) {
+      await Promise.all(CORE.slice(i, i + CONCURRENCY).map(u => cache.add(new Request(u, { cache: 'reload' }))))
     }
   })())
 })

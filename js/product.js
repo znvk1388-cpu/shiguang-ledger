@@ -30,9 +30,26 @@
       S.listTransactions({ type: 'expense', from: from, to: F.iso(tomorrow), limit: 1 })
     ])
     if (ticket !== revision || st.tab !== 'home') return
-    /* 终审 P1（3.1）：账本全空时整块收起——「今天 ¥0.00」没有信息量，
-       Welcome 卡的双按钮（记第一笔 / 载入示例数据）就是空账本的动作入口 */
-    if (await U.ledgerEmpty()) { target.innerHTML = ''; target.classList.add('hidden'); return }
+    /* 账本全空时不再整块收起（C5）：原来只剩欢迎卡一条路，最快的「点分类记一笔」
+       反而消失了。空态保留一行常用分类直达，去掉没有信息量的「今天 ¥0.00」。 */
+    if (await U.ledgerEmpty()) {
+      let quickOnEmpty = true
+      try { quickOnEmpty = localStorage.getItem('ledger10_home_quick') !== 'off' } catch (e) { /* 忽略 */ }
+      const emptyRoots = quickOnEmpty ? S.rootCategories('expense').slice(0, 5) : []
+      if (!emptyRoots.length) { target.innerHTML = ''; target.classList.add('hidden'); return }
+      target.innerHTML = '<section class="sg-quickbar card" aria-label="快捷记账">' +
+        '<div class="qb-cats">' +
+        emptyRoots.map(c => '<button data-quick-category="' + c.id + '" aria-label="用「' + F.escapeHtml(c.name) + '」记第一笔">' +
+          '<span class="qb-ic">' + F.escapeHtml(c.icon || '＋') + '</span><span class="qb-lb">' + F.escapeHtml(c.name) + '</span></button>').join('') +
+        '<button id="sgMoreEntry" aria-label="更多分类"><span class="qb-ic qb-ic-more">' + icon('plus') + '</span><span class="qb-lb">更多</span></button>' +
+        '</div></section>'
+      target.querySelectorAll('[data-quick-category]').forEach(b => {
+        b.onclick = () => U.openEditor(null, 'expense', { categoryId: Number(b.dataset.quickCategory) })
+      })
+      const more = document.getElementById('sgMoreEntry')
+      if (more) more.onclick = () => U.openEditor(null)
+      return
+    }
     /* 首页可定制：用户可以在「界面与配色」里关掉快捷记账条 */
     let quickOn = true
     try { quickOn = localStorage.getItem('ledger10_home_quick') !== 'off' } catch (e) { /* 忽略 */ }

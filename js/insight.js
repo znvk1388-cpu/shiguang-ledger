@@ -690,7 +690,7 @@ window.Insight = (function () {
   }
 
   async function removeTag(tag) {
-    if (!confirm('从所有账目里移除标签「' + tag + '」？（不会删除账目本身）')) return
+    if (!(await confirmSheet({ title: '移除标签', danger: true, okText: '移除', body: '从所有账目里移除标签「' + tag + '」？（不会删除账目本身）' }))) return
     try {
       const { rows } = await S.listTransactions({ tag, limit: 100000 })
       for (const t of rows) {

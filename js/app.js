@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.18.17'
+  const VERSION = '1.19.0'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -141,8 +141,9 @@ window.App = (function () {
         return '· ' + nm + ' ¥' + F.yuan(p.amount) + ' × ' + p.dates.length + ' 笔（' + p.dates[0] + ' 起）'
       })
       if (pend.length > 3) lines.push('· 另有 ' + (pend.length - 3) + ' 条规则')
-      const ok = confirm('有 ' + total + ' 笔到期的周期账目待补记：\n\n' + lines.join('\n') +
-        '\n\n补记出来的账目带「自动」标记，可在明细里一键撤销。')
+      const ok = await confirmSheet({ title: '补记周期账目', okText: '补记', cancelText: '暂不补记',
+        body: '有 ' + total + ' 笔到期的周期账目待补记：\n\n' + lines.join('\n') +
+          '\n\n补记出来的账目带「自动」标记，可在明细里一键撤销。' })
       if (!ok) return
       const gen = await S.applyRecurring(new Date())
       if (gen > 0) { UI.toast('已补记 ' + gen + ' 笔周期账目'); await refresh() }
@@ -357,8 +358,9 @@ window.App = (function () {
         finish(true)
       }
       function onKey(e) { if (e.key === 'Enter') onSubmit() }
-      function onForget() {
-        if (!confirm('清除应用锁？\n\n这是本机的便捷锁，清除后任何人都能打开本 App；账目数据不会被删除。')) return
+      async function onForget() {
+        if (!(await confirmSheet({ title: '清除应用锁', danger: true, okText: '清除',
+          body: '清除应用锁？\n\n这是本机的便捷锁，清除后任何人都能打开本 App；账目数据不会被删除。' }))) return
         disableLock()
         finish(true)
       }
@@ -396,13 +398,30 @@ window.App = (function () {
     if (await UI.ledgerEmpty()) { el.innerHTML = ''; return }
     let backed = ''
     try { backed = localStorage.getItem('ledger10_bk1') || '' } catch (e) { /* 忽略 */ }
-    /* 明细页首屏寸土寸金：只有「还没备份过」时才留一行 28px 提示，
-       备份过一次就永久收起（备份入口固定在「我的 · 数据与安全」里）。
-       统计 / 资产 / 我的 页不再重复这条提示。 */
-    if (backed || state.tab !== 'home') { el.innerHTML = ''; return }
-    el.innerHTML = '<div class="slim-note"><span>本机账本 · 尚未备份</span>' +
-      '<button id="bannerBackup">备份</button><button id="bannerBind">登录同步</button></div>'
-    $('#bannerBind').addEventListener('click', () => backToAuth())
+    /* C6：原来只有「从没备份过」才提示，备份过一次就永久静默 ——
+       而最容易丢数据的恰恰是「半年前备过一次，之后再没管」的状态。
+       超过 30 天改为提醒一次，可以「7 天内不再提醒」。 */
+    const days = backed ? Math.floor((Date.now() - new Date(backed).getTime()) / 86400000) : null
+    const stale = days != null && days >= 30
+    let mute = 0
+    try { mute = Number(localStorage.getItem('ledger10_bk_nudge') || 0) || 0 } catch (e) { /* 忽略 */ }
+    /* 明细页首屏寸土寸金：只有「还没备份过」或「已过期 30 天」时才留一行提示。
+       统计 / 资产 / 我的 页不重复这条提示。 */
+    if (state.tab !== 'home') { el.innerHTML = ''; return }
+    if (backed && !stale) { el.innerHTML = ''; return }
+    if (stale && mute > Date.now()) { el.innerHTML = ''; return }
+    el.innerHTML = '<div class="slim-note"><span>' +
+      (backed ? '本机账本 · 已 ' + days + ' 天没备份' : '本机账本 · 尚未备份') + '</span>' +
+      '<button id="bannerBackup">备份</button>' +
+      (backed ? '<button id="bannerLater">稍后</button>' : '<button id="bannerBind">登录同步</button>') +
+      '</div>'
+    const bind = $('#bannerBind')
+    if (bind) bind.addEventListener('click', () => backToAuth())
+    const later = $('#bannerLater')
+    if (later) later.addEventListener('click', () => {
+      try { localStorage.setItem('ledger10_bk_nudge', String(Date.now() + 7 * 86400000)) } catch (e) { /* 忽略 */ }
+      el.innerHTML = ''
+    })
     $('#bannerBackup').addEventListener('click', () => UI.openBackupSheet())
   }
 
@@ -883,7 +902,8 @@ window.App = (function () {
          注意：迁移**不会**清空本机数据 —— 本机是这份数据的唯一副本，
          清理改为用户在「我的 → 数据与同步」里显式操作。 */
       if (await S.guestHasData()) {
-        const ok = confirm('检测到本机有游客账目，要迁移到云端账号吗？\n（账目和凭证图片都会上传；本机副本会保留，确认迁移完整后可再手动清理）')
+        const ok = await confirmSheet({ title: '迁移本机账目', okText: '迁移到云端', cancelText: '先不迁移',
+          body: '检测到本机有游客账目，要迁移到云端账号吗？\n（账目和凭证图片都会上传；本机副本会保留，确认迁移完整后可再手动清理）' })
         if (ok) {
           const r = await S.migrateGuestToCloud(session, m => UI.toast(m))
           if (r.complete) UI.toast('迁移完成：' + r.txns + ' 笔账目、' + r.images + ' 张图片；本机副本已保留')
@@ -1148,6 +1168,12 @@ window.App = (function () {
 
   /* ---------- 启动 ---------- */
   async function boot() {
+    /* 本机覆盖层镜像（A3 中期）：先把 IndexedDB 里的本机设置补回 localStorage
+       （浏览器清过 localStorage 时能自己长回来），再挂上写穿钩子。
+       必须早于 applyTheme/applyUi —— 它们要读 ledger10_theme / ledger10_ui。 */
+    try {
+      if (window.Overlay) { await window.Overlay.restore(); window.Overlay.install() }
+    } catch (e) { /* 镜像失败不影响记账主流程 */ }
     applyTheme()
     applyUi()
     setupContainer()

@@ -19,15 +19,23 @@
 
   const FREQ_LABEL = { daily: '每天', weekly: '每周', monthly: '每月', yearly: '每年' }
 
+  /* 内部 id 可能是自增数字（游客）也可能是服务端返回的数字字符串，
+     统一成「纯数字就转 Number」再回传，避免 eq('id','12') 与 eq('id',12) 两种写法 */
+  function idOf(v) { return /^\d+$/.test(String(v)) ? Number(v) : v }
+
   function openCategoryManager() {
     const kinds = ['expense', 'income']
     let html = '<div class="sheet-head"><span class="sheet-title">分类管理</span><button id="catClose" class="btn sm line">关闭</button></div>'
+    html += '<div class="small muted" style="margin-bottom:10px">点任意分类可改名、换图标或删除。</div>'
     kinds.forEach(k => {
       html += '<div class="field"><label>' + (k === 'expense' ? '支出' : '收入') + '</label><div style="display:flex;flex-wrap:wrap;gap:6px">'
-      S.rootCategories(k).forEach(p => {
-        html += '<span class="chip" style="background:' + p.color + '1f">' + esc(p.icon) + ' ' + esc(p.name) + '</span>'
+      const roots = S.rootCategories(k)
+      if (!roots.length) html += '<span class="small muted">还没有分类</span>'
+      roots.forEach(p => {
+        html += '<button type="button" class="chip" data-cat="' + p.id + '" style="background:' + (p.color || '#8a93a6') + '1f;border:0">' +
+          esc(p.icon || '') + ' ' + esc(p.name) + '</button>'
         S.childCategories(p.id).forEach(c => {
-          html += '<span class="chip" style="opacity:.75">' + esc(c.name) + '</span>'
+          html += '<button type="button" class="chip" data-cat="' + c.id + '" style="opacity:.75;border:0">' + esc(c.name) + '</button>'
         })
       })
       html += '</div></div>'
@@ -40,6 +48,9 @@
       '<button class="btn block" id="newCatSave">添加分类</button>'
     openSheet(html)
     $('#catClose').addEventListener('click', closeSheet)
+    $$('[data-cat]', $('#sheet')).forEach(b => {
+      b.addEventListener('click', () => openCategoryEditor(b.getAttribute('data-cat')))
+    })
     $('#newCatSave').addEventListener('click', async () => {
       const name = $('#newCatName').value.trim()
       if (!name) { $('#catErr').textContent = '请填写分类名'; return }
@@ -49,8 +60,74 @@
           color: '#8a93a6', sort_order: 99,
         })
         toast('已添加')
-        closeSheet()
+        openCategoryManager()
+        window.App.refresh()
       } catch (e) { $('#catErr').textContent = '添加失败' }
+    })
+  }
+
+  /* 单个分类编辑（B1）：改名 / 换图标 / 换色 / 删除。
+     删除前先把「会影响几笔账目」算出来告诉用户 —— 分类删掉后账目还在，
+     只是分类变空，这个预期必须提前说清，否则用户会以为账也一起删了。 */
+  async function openCategoryEditor(id) {
+    const c = S.category(idOf(id))
+    if (!c) { toast('分类不存在，请刷新后重试'); return }
+    let used = 0
+    try {
+      const r = await S.listTransactions({ categoryId: c.id, limit: 1 })
+      used = Number(r && r.total) || 0
+    } catch (e) { /* 统计失败不影响编辑 */ }
+    const kids = S.childCategories(c.id).length
+    const root = !c.parent_id
+    let html = '<div class="sheet-head"><span class="sheet-title">编辑分类</span><button id="ceClose" class="btn sm line">关闭</button></div>'
+    html += '<div class="field"><label for="ceName">分类名称</label>' +
+      '<input id="ceName" class="input" maxlength="12" value="' + esc(c.name) + '"></div>'
+    html += '<div class="row" style="gap:8px">' +
+      '<div class="field grow" style="margin-top:0"><label for="ceIcon">图标</label>' +
+      '<input id="ceIcon" class="input" maxlength="4" value="' + esc(c.icon || '📦') + '"></div>' +
+      '<div class="field" style="width:96px;flex:none;margin-top:0"><label for="ceColor">颜色</label>' +
+      '<input id="ceColor" class="input" type="color" value="' + (c.color || '#8a93a6') + '" style="padding:2px;height:42px"></div></div>'
+    html += '<div class="err" id="ceErr"></div>'
+    html += '<button class="btn block" id="ceSave">保存修改</button>'
+    if (root) html += '<div class="divider">危险操作</div><button class="btn block danger" id="ceDel">删除这个分类</button>'
+    html += '<div class="hint">' +
+      (used ? '已有 ' + used + ' 笔账目用了这个分类。删除后这些账目的分类会变成「未分类」，账目本身与金额都不受影响。' : '暂时没有账目使用这个分类。') +
+      (kids ? ' 它下面还有 ' + kids + ' 个子分类，需要先删掉子分类。' : '') +
+      '</div>'
+    openSheet(html)
+    $('#ceClose').addEventListener('click', closeSheet)
+    $('#ceSave').addEventListener('click', async () => {
+      const name = $('#ceName').value.trim()
+      if (!name) { $('#ceErr').textContent = '请填写分类名'; return }
+      const btn = $('#ceSave')
+      btn.disabled = true
+      try {
+        await S.updateCategory(c.id, { name: name, icon: $('#ceIcon').value.trim() || '📦', color: $('#ceColor').value })
+        toast('已保存')
+        openCategoryManager()
+        window.App.refresh()
+      } catch (e) {
+        $('#ceErr').textContent = '保存失败：' + (e && e.message ? e.message : '请重试')
+        btn.disabled = false
+      }
+    })
+    const del = $('#ceDel')
+    if (del) del.addEventListener('click', async () => {
+      if (kids) { toast('请先删除它下面的 ' + kids + ' 个子分类'); return }
+      const msg = used
+        ? '删除后这 ' + used + ' 笔账目的分类会变成「未分类」，账目不会丢。确定删除？'
+        : '确定删除这个分类？'
+      if (!(await confirmSheet({ title: '删除分类', danger: true, okText: '删除', body: msg }))) return
+      del.disabled = true
+      try {
+        await S.deleteCategory(c.id)
+        toast('已删除')
+        openCategoryManager()
+        window.App.refresh()
+      } catch (e) {
+        toast('删除失败：' + (e && e.message ? e.message : '请重试'))
+        del.disabled = false
+      }
     })
   }
 
@@ -59,39 +136,79 @@
     const list = S.allAccounts()
     let html = '<div class="sheet-head"><span class="sheet-title">账户管理</span><button id="amClose" class="btn sm line">关闭</button></div>'
     if (list.length) {
-      html += '<div class="field" style="margin:0 0 10px"><label>各账户币种</label>' +
-        '<div class="small muted">记账金额按账户币种保存；总资产会按「汇率设置」折算成 ' + base + '。</div></div>'
+      html += '<div class="field" style="margin:0 0 10px"><label>各账户</label>' +
+        '<div class="small muted">点账户可改名、改期初余额；金额按账户币种保存，总资产按「汇率设置」折算成 ' + base + '。</div></div>'
     }
     html += list.map(a => {
       const cur = a.currency || 'CNY'
-      return '<div class="list-item"><div class="ico">' + esc(a.icon || '💰') + '</div>' +
-      '<div class="grow"><div>' + esc(a.name) + '</div><div class="small muted">期初 ' +
-        F.moneySym(F.toCents(a.initial_balance), F.currencySym(cur)) + '</div></div>' +
-      '<select class="select" data-cur="' + a.id + '" style="width:104px;flex:none;padding:6px 8px">' +
-      F.CURRENCIES.map(c => '<option value="' + c.code + '"' + (c.code === cur ? ' selected' : '') + '>' + c.code + '</option>').join('') +
-      '</select>' +
-      '<button class="btn sm danger" data-del="' + a.id + '" style="flex:none">删除</button></div>'
+      return '<div class="list-item"><button type="button" class="ico" data-acc="' + a.id + '" style="border:0;background:none;cursor:pointer">' + esc(a.icon || '💰') + '</button>' +
+      '<div class="grow" data-acc="' + a.id + '" style="cursor:pointer"><div>' + esc(a.name) + '</div><div class="small muted">期初 ' +
+        F.moneySym(F.toCents(a.initial_balance), F.currencySym(cur)) + ' · ' + cur + '</div></div>' +
+      '<button class="btn sm line" data-acc="' + a.id + '" style="flex:none">编辑</button>' +
+      '<button class="btn sm danger" data-del="' + a.id + '" style="flex:none;margin-left:4px">删除</button></div>'
     }).join('') || '<div class="small muted">暂无账户</div>'
     html += '<div class="hint">删除账户不会删除已有账目。修改币种不会换算历史金额，仅改变后续统计的折算口径。</div>'
     openSheet(html)
     $('#amClose').addEventListener('click', closeSheet)
-    $$('[data-cur]', $('#sheet')).forEach(sel => {
-      sel.addEventListener('change', async () => {
-        const id = Number(sel.getAttribute('data-cur'))
-        try {
-          await S.updateAccount(id, { currency: sel.value })
-          toast('已改为 ' + sel.value)
-          window.App.renderTab()
-        } catch (e) { toast('保存失败') }
-      })
+    $$('[data-acc]', $('#sheet')).forEach(el => {
+      el.addEventListener('click', () => openAccountEditor(el.getAttribute('data-acc')))
     })
     $$('[data-del]', $('#sheet')).forEach(b => {
       b.addEventListener('click', async () => {
-        if (!confirm('确定删除该账户？')) return
-        await S.deleteAccount(Number(b.getAttribute('data-del')))
-        toast('已删除')
-        openAccountManager()
+        if (!(await confirmSheet({ title: '删除账户', danger: true, okText: '删除', body: '确定删除该账户？已记录的账目不会被删除。' }))) return
+        try {
+          await S.deleteAccount(idOf(b.getAttribute('data-del')))
+          toast('已删除')
+          openAccountManager()
+          window.App.refresh()
+        } catch (e) { toast('删除失败：' + (e && e.message ? e.message : '请重试')) }
       })
+    })
+  }
+
+  /* 账户编辑（B1）：名称 / 期初余额 / 币种。
+     期初余额以前完全改不了，只能删了重建 —— 而删账户会把历史账目变成「无账户」。 */
+  function openAccountEditor(id) {
+    const a = S.allAccounts().find(x => String(x.id) === String(id))
+    if (!a) { toast('账户不存在，请刷新后重试'); return }
+    const cur = a.currency || 'CNY'
+    let html = '<div class="sheet-head"><span class="sheet-title">编辑账户</span><button id="aeClose" class="btn sm line">关闭</button></div>'
+    html += '<div class="field"><label for="aeName">账户名称</label>' +
+      '<input id="aeName" class="input" maxlength="12" value="' + esc(a.name) + '"></div>'
+    html += '<div class="row" style="gap:8px">' +
+      '<div class="field grow" style="margin-top:0"><label for="aeInit">期初余额（' + esc(cur) + '）</label>' +
+      '<input id="aeInit" class="input" inputmode="decimal" value="' + esc(String(F.yuan(F.toCents(a.initial_balance)))) + '"></div>' +
+      '<div class="field" style="width:110px;flex:none;margin-top:0"><label for="aeCur">币种</label>' +
+      '<select id="aeCur" class="select">' +
+      F.CURRENCIES.map(c => '<option value="' + c.code + '"' + (c.code === cur ? ' selected' : '') + '>' + c.code + '</option>').join('') +
+      '</select></div></div>'
+    html += '<div class="field"><label for="aeIcon">图标</label>' +
+      '<input id="aeIcon" class="input" maxlength="4" value="' + esc(a.icon || '💰') + '"></div>'
+    html += '<div class="err" id="aeErr"></div><button class="btn block" id="aeSave">保存修改</button>'
+    html += '<div class="hint">期初余额是「开始记账时这个账户里已有的钱」，改了会直接改变总资产与净资产曲线，不会生成账目。</div>'
+    openSheet(html)
+    $('#aeClose').addEventListener('click', closeSheet)
+    $('#aeSave').addEventListener('click', async () => {
+      const name = $('#aeName').value.trim()
+      if (!name) { $('#aeErr').textContent = '请填写账户名'; return }
+      const initRaw = $('#aeInit').value.trim()
+      if (initRaw && !/^-?\d*(\.\d{0,2})?$/.test(initRaw)) { $('#aeErr').textContent = '期初余额最多两位小数'; return }
+      const btn = $('#aeSave')
+      btn.disabled = true
+      try {
+        await S.updateAccount(a.id, {
+          name: name,
+          icon: $('#aeIcon').value.trim() || '💰',
+          initial_balance: F.yuan(F.toCents(Number(initRaw || 0))),
+          currency: $('#aeCur').value,
+        })
+        toast('已保存')
+        openAccountManager()
+        window.App.refresh()
+      } catch (e) {
+        $('#aeErr').textContent = '保存失败：' + (e && e.message ? e.message : '请重试')
+        btn.disabled = false
+      }
     })
   }
 
@@ -123,7 +240,7 @@
     })
     $$('#sheet [data-purge]').forEach(b => {
       b.addEventListener('click', async () => {
-        if (!confirm('彻底删除后无法恢复，确定？')) return
+        if (!(await confirmSheet({ title: '彻底删除', danger: true, okText: '彻底删除', body: '彻底删除后无法恢复，确定？' }))) return
         await S.purgeTransaction(Number(b.getAttribute('data-purge')))
         toast('已彻底删除')
         openTrash()
@@ -219,7 +336,7 @@
       b.addEventListener('click', async () => {
         const it = items.find(x => x.r.id === Number(b.getAttribute('data-skip')))
         if (!it || !it.due) return
-        if (!confirm('跳过 ' + it.due.slice(5) + ' 这一期？之后仍按周期继续。')) return
+        if (!(await confirmSheet({ title: '跳过这一期', okText: '跳过', body: '跳过 ' + it.due.slice(5) + ' 这一期？之后仍按周期继续。' }))) return
         b.disabled = true
         try {
           await S.updateRecurring(it.r.id, { last_run_date: it.due })
@@ -238,7 +355,7 @@
     })
     $$('#sheet [data-rdel]').forEach(b => {
       b.addEventListener('click', async () => {
-        if (!confirm('删除该规则？已生成的账目不受影响')) return
+        if (!(await confirmSheet({ title: '删除周期规则', danger: true, okText: '删除', body: '删除该规则？已生成的账目不受影响' }))) return
         await S.deleteRecurring(Number(b.getAttribute('data-rdel')))
         openRecurringManager()
       })
@@ -270,6 +387,8 @@
       rows +
       '<div class="small muted" style="margin-top:4px">留空或填 0 表示恢复默认值。汇率只存在本机，不会上传。</div></div>' +
       '<button class="btn block" id="fxSave">保存汇率</button>' +
+      '<button class="btn line block" id="fxFetch" style="margin-top:8px">从网络更新汇率</button>' +
+      '<div class="small muted" style="margin-top:6px" id="fxAt">' + fxAtText() + '</div>' +
       '<button class="btn line block" id="fxReset" style="margin-top:8px">恢复默认汇率</button>' +
       '<div class="hint">汇率只存在本机，不会上传。设置后，外币账户的余额、净资产趋势、收支与分类统计都会折算成基准币种后再汇总；账户列表里仍显示原币种金额。</div>'
     )
@@ -290,6 +409,38 @@
       toast('已恢复默认汇率')
       window.App.renderTab()
     })
+    /* 在线汇率（D4）：点一下就从公开汇率服务拉一次。
+       按钮本身就是同意动作，因此不再叠一层确认弹层 —— 这一层是 sheet，
+       再弹确认会把汇率面板顶掉，用户还得重新打开。
+       失败一律只提示、不动已有汇率：记账不能因为第三方接口挂了而不可用。 */
+    $('#fxFetch').addEventListener('click', async () => {
+      const btn = $('#fxFetch')
+      if (!btn || btn.disabled) return
+      const label = btn.textContent
+      btn.disabled = true
+      btn.textContent = '正在获取…'
+      try {
+        const pack = await F.fetchRates()
+        F.applyRates(pack)
+        closeSheet()
+        toast('汇率已按最新行情更新')
+        window.App.renderTab()
+        openFxSettings()
+      } catch (e) {
+        btn.disabled = false
+        btn.textContent = label
+        toast((e && e.message) ? e.message : '更新失败，请稍后再试')
+      }
+    })
+  }
+
+  /* 上次联机更新的时间；没更新过就说明当前用的是手填值 */
+  function fxAtText() {
+    const at = F.fxUpdatedAt ? F.fxUpdatedAt() : ''
+    if (!at) return '当前为手动汇率，尚未联机更新过'
+    let t = at
+    try { t = F.dtstr(new Date(at)) } catch (e) { t = at }
+    return '上次联机更新：' + t + '（向 open.er-api.com 请求，不发送账目数据）'
   }
 
   function openUiSettings() {
@@ -370,7 +521,7 @@
     $$('#sheet [data-bkdel]').forEach(b => {
       b.addEventListener('click', async () => {
         const id = Number(b.getAttribute('data-bkdel'))
-        if (!confirm('删除该账本？其中的账目/预算/周期会转移到另一个账本，不会丢失')) return
+        if (!(await confirmSheet({ title: '删除账本', danger: true, okText: '删除', body: '删除该账本？其中的账目/预算/周期会转移到另一个账本，不会丢失' }))) return
         try {
           await S.deleteBook(id)
           toast('账本已删除，数据已转移')
@@ -442,8 +593,8 @@
       closeSheet()
       toast('PIN 已更新')
     })
-    $('#lkOff').addEventListener('click', () => {
-      if (!confirm('关闭应用锁？之后打开 App 不再需要 PIN。')) return
+    $('#lkOff').addEventListener('click', async () => {
+      if (!(await confirmSheet({ title: '关闭应用锁', danger: true, okText: '关闭', body: '关闭应用锁？之后打开 App 不再需要 PIN。' }))) return
       window.App.disableLock()
       closeSheet()
       toast('应用锁已关闭')

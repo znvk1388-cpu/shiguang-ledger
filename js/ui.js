@@ -130,9 +130,56 @@ window.UI = (function () {
       draft.reimbursable, draft.reimbStatus, draft.reimbExpect,
       draft.keepAtts, draft.newFiles.map(f => [f.file && f.file.name, f.file && f.file.size, f.file && f.file.lastModified])])
   }
+  /* 编辑器是否有未保存改动。纯判定，不弹任何东西。 */
+  function editorDirty() {
+    return !!$('#edSave') && editorBaseline !== null && editorSnapshot() !== editorBaseline
+  }
+  /* 离开编辑器前的询问（B5 的最后一个例外，改动原因记在这里）：
+     试过把它换成 confirmSheet 异步弹层 —— 实测不行，而且不是样式问题：
+     全应用只有一层 #sheet，openSheet 会「替换」当前内容。在编辑器里弹确认层，
+     编辑器 DOM 会被整个顶掉，用户点「继续编辑」回到的是一张被清空的表单，
+     输入内容当场消失（tests/ui.test.cjs 的「保留输入」断言直接挂）。
+     要彻底解决得加第二层弹层容器（独立 mask + 焦点陷阱 + inert 叠加），
+     那是独立改动，不适合和本轮加固混在一起，因此这里继续用原生 confirm：
+     同步、不破坏 DOM，代价是样式不统一。
+     注意保留 `typeof confirm` 保护：个别 WebView 会禁用原生弹窗，
+     这种情况下直接放行关闭，避免用户被永远锁在编辑器里。 */
   function mayLeaveEditor() {
-    return !$('#edSave') || editorBaseline === null || editorSnapshot() === editorBaseline ||
-      confirm('有尚未保存的修改，确定放弃并关闭吗？')
+    if (!editorDirty()) return true
+    if (typeof confirm !== 'function') return true
+    return !!confirm('有尚未保存的修改，确定放弃并关闭吗？')
+  }
+
+  /* 统一确认弹层（B5）
+     ------------------------------------------------------------------
+     原生 confirm 在微信内置浏览器和部分 ROM WebView 里样式突兀，可能被系统抑制，
+     也没有焦点管理。这里复用 openSheet（自带 inert 背景隔离 + 焦点还原）。
+     拿不到弹层容器的场景（单测环境、极早期调用）退回原生 confirm，
+     保证调用方逻辑不中断。返回 Promise<boolean>。 */
+  function confirmSheet(opt) {
+    const o = typeof opt === 'string' ? { body: opt } : (opt || {})
+    const body = String(o.body || '')
+    const title = String(o.title || '请确认')
+    const okText = String(o.okText || '确定')
+    const cancelText = String(o.cancelText || '取消')
+    const danger = !!o.danger
+    const sheet = document.getElementById('sheet')
+    if (!sheet) return Promise.resolve(typeof confirm === 'function' ? !!confirm(body || title) : false)
+    return new Promise(resolve => {
+      openSheet(
+        '<div class="sheet-head"><span class="sheet-title">' + esc(title) + '</span>' +
+        '<button type="button" id="cfClose" class="btn sm line">关闭</button></div>' +
+        '<div class="small" style="white-space:pre-wrap;line-height:1.65;margin:2px 0 14px">' + esc(body) + '</div>' +
+        '<div class="row" style="gap:8px">' +
+        '<button type="button" class="btn line grow" id="cfNo">' + esc(cancelText) + '</button>' +
+        '<button type="button" class="btn grow' + (danger ? ' danger' : '') + '" id="cfYes">' + esc(okText) + '</button>' +
+        '</div>'
+      )
+      const done = v => { resolve(v); closeSheet() }
+      $('#cfYes').addEventListener('click', () => done(true))
+      $('#cfNo').addEventListener('click', () => done(false))
+      $('#cfClose').addEventListener('click', () => done(false))
+    })
   }
   window.addEventListener('beforeunload', e => {
     if (sheetOpen && $('#edSave') && editorBaseline !== null && editorSnapshot() !== editorBaseline) {
@@ -184,6 +231,7 @@ window.UI = (function () {
   }
   function closeSheet(force) {
     if (editorSaving) return
+    /* 有未保存改动时先问一句（同步守卫，见 mayLeaveEditor 的注释） */
     if (force !== true && sheetOpen && !mayLeaveEditor()) return
     if (editorKeyHandler) document.removeEventListener('keydown', editorKeyHandler)
     editorKeyHandler = null
@@ -632,6 +680,8 @@ window.UI = (function () {
   }
 
   async function renderHome(st) {
+    /* 切到别的 Tab 时退出多选：否则批量操作条会留在统计/资产页上 */
+    if (st.tab !== 'home' && batch.on) { batch = { on: false, sel: new Set() }; syncBatchBar() }
     const content = $('#content')
     const version = ++homeRenderVersion
     const context = homeContext(st)
@@ -990,7 +1040,15 @@ window.UI = (function () {
     /* 周期记账补记出来的账目带 tags:['auto']，标出来才能一眼分辨「我没记过这笔」 */
     const auto = (Array.isArray(t.tags) && t.tags.indexOf('auto') >= 0)
       ? '<span class="tiny auto-badge">自动</span>' : ''
-    return '<div class="txn" role="button" tabindex="0" aria-label="编辑 ' + esc(name) + '" data-id="' + t.id + '">' +
+    /* 批量编辑（B3）：多选态下行首多一个勾选位，行本身仍可点击（点击=切换选中） */
+    const picked = batch.on && batch.sel.has(String(t.id))
+    const pickBox = batch.on
+      ? '<span class="pick-box' + (picked ? ' on' : '') + '" aria-hidden="true">' + (picked ? ic('check') : '') + '</span>'
+      : ''
+    return '<div class="txn' + (batch.on ? ' pick' : '') + (picked ? ' sel' : '') + '" role="button" tabindex="0"' +
+      (batch.on ? ' aria-pressed="' + (picked ? 'true' : 'false') + '"' : '') +
+      ' aria-label="' + (batch.on ? (picked ? '取消选择 ' : '选择 ') : '编辑 ') + esc(name) + '" data-id="' + t.id + '">' +
+      pickBox +
       '<div class="ico" style="background:' + color + '1f">' + icon + '</div>' +
       '<div class="grow"><div class="ellipsis">' + hl(name) + reim + auto + '</div>' +
       '<div class="small muted ellipsis">' + hl(sub) + '</div></div>' +
@@ -1025,11 +1083,187 @@ window.UI = (function () {
       el.addEventListener('click', () => {
         if (st.tab !== 'home' || context !== homeContext(st) || $('#mainView.hidden')) return
         const id = Number(el.getAttribute('data-id'))
+        /* 多选态：点行 = 切换选中，不打开编辑器 */
+        if (batch.on) { batchToggleOne(id); return }
         const txn = window.App.state.txns.find(t => t.id === id)
         if (txn) openEditor(txn)
       })
     })
   }
+
+  /* ---------- 批量编辑（B3） ----------
+     对标钱迹/随手记的「多选改分类/账户/删除」。本应用以前只能逐条进编辑器改，
+     整理历史数据（比如把「餐饮」批量归到「外卖」）要点几十次。
+     实现上刻意不发明新的写路径：改分类/改账户走 updateTransaction，
+     删除走 deleteTransaction —— 都是已有的同步包装方法，
+     断网时自然进本地待上传队列，幂等标记也照旧生效。 */
+  let batch = { on: false, sel: new Set() }
+
+  function batchBarEl() {
+    let el = document.getElementById('batchBar')
+    if (!el) {
+      el = document.createElement('div')
+      el.id = 'batchBar'
+      el.className = 'batch-bar'
+      el.setAttribute('role', 'toolbar')
+      el.setAttribute('aria-label', '批量操作')
+      document.body.appendChild(el)
+    }
+    return el
+  }
+  function syncBatchBar() {
+    const el = batchBarEl()
+    if (!batch.on) { el.classList.remove('on'); el.innerHTML = ''; return }
+    el.classList.add('on')
+    const n = batch.sel.size
+    el.innerHTML =
+      '<div class="batch-count" role="status">已选 <b class="num">' + n + '</b> 笔</div>' +
+      '<div class="batch-acts">' +
+      '<button type="button" class="btn sm line" id="batchAll">' + (n && n === (window.App.state.txns || []).length ? '取消全选' : '全选') + '</button>' +
+      '<button type="button" class="btn sm line" id="batchCat"' + (n ? '' : ' disabled') + '>改分类</button>' +
+      '<button type="button" class="btn sm line" id="batchAcc"' + (n ? '' : ' disabled') + '>改账户</button>' +
+      '<button type="button" class="btn sm danger" id="batchDel"' + (n ? '' : ' disabled') + '>删除</button>' +
+      '<button type="button" class="btn sm line" id="batchExit">退出</button>' +
+      '</div>'
+    $('#batchAll').addEventListener('click', () => {
+      const all = (window.App.state.txns || []).map(t => String(t.id))
+      if (batch.sel.size === all.length) batch.sel.clear()
+      else all.forEach(id => batch.sel.add(id))
+      repaintBatch()
+    })
+    $('#batchCat').addEventListener('click', () => batchPickCategory())
+    $('#batchAcc').addEventListener('click', () => batchPickAccount())
+    $('#batchDel').addEventListener('click', () => batchDelete())
+    $('#batchExit').addEventListener('click', () => { batch = { on: false, sel: new Set() }; repaintBatch() })
+  }
+  function repaintBatch() {
+    syncBatchBar()
+    /* 工具栏上的多选按钮跟着高亮/取消高亮 */
+    $$('[data-batch]').forEach(b => {
+      b.classList.toggle('on', batch.on)
+      b.setAttribute('aria-pressed', batch.on ? 'true' : 'false')
+    })
+    /* 只重画行上的选中态，不整页重绘：整页重绘会丢滚动位置 */
+    $$('#content .txn').forEach(el => {
+      const id = String(el.getAttribute('data-id'))
+      const picked = batch.sel.has(id)
+      el.classList.toggle('sel', picked)
+      el.classList.toggle('pick', batch.on)
+      if (batch.on) el.setAttribute('aria-pressed', picked ? 'true' : 'false')
+      else el.removeAttribute('aria-pressed')
+      let box = el.querySelector('.pick-box')
+      if (batch.on && !box) {
+        box = document.createElement('span')
+        box.className = 'pick-box'
+        box.setAttribute('aria-hidden', 'true')
+        el.insertBefore(box, el.firstChild)
+      }
+      if (box) {
+        box.classList.toggle('on', picked)
+        box.innerHTML = picked ? ic('check') : ''
+      }
+    })
+  }
+  function batchToggleOne(id) {
+    const key = String(id)
+    if (batch.sel.has(key)) batch.sel.delete(key)
+    else batch.sel.add(key)
+    repaintBatch()
+  }
+  function startBatch() {
+    batch = { on: true, sel: new Set() }
+    syncBatchBar()
+    repaintBatch()
+    toast('已进入多选：点账目选中，再选操作')
+  }
+
+  function batchPickCategory() {
+    const roots = S.rootCategories('expense').concat(S.rootCategories('income'))
+    let html = '<div class="sheet-head"><span class="sheet-title">批量改分类</span><button id="bcClose" class="btn sm line">关闭</button></div>' +
+      '<div class="small muted" style="margin-bottom:8px">将把选中的 ' + batch.sel.size + ' 笔账目改成同一个分类。</div>'
+    roots.forEach(p => {
+      html += '<div class="field" style="margin-bottom:8px"><label>' + esc(p.icon || '') + ' ' + esc(p.name) + '</label>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+        '<button type="button" class="chip" data-bcat="' + p.id + '">用「' + esc(p.name) + '」</button>' +
+        S.childCategories(p.id).map(c => '<button type="button" class="chip" data-bcat="' + c.id + '">' + esc(c.name) + '</button>').join('') +
+        '</div></div>'
+    })
+    openSheet(html)
+    $('#bcClose').addEventListener('click', closeSheet)
+    $$('[data-bcat]', $('#sheet')).forEach(b => {
+      b.addEventListener('click', () => {
+        const id = idNum(b.getAttribute('data-bcat'))
+        closeSheet()
+        batchUpdate({ category_id: id }, '改分类')
+      })
+    })
+  }
+
+  function batchPickAccount() {
+    const list = S.allAccounts()
+    let html = '<div class="sheet-head"><span class="sheet-title">批量改账户</span><button id="baClose" class="btn sm line">关闭</button></div>' +
+      '<div class="small muted" style="margin-bottom:8px">将把选中的 ' + batch.sel.size + ' 笔账目的账户改成同一个。</div>'
+    if (!list.length) html += '<div class="small muted">还没有账户</div>'
+    html += list.map(a => '<button type="button" class="list-item" data-bacc="' + a.id + '" style="width:100%;border:0;background:none;text-align:left">' +
+      '<div class="ico">' + esc(a.icon || '💰') + '</div>' +
+      '<div class="grow"><div>' + esc(a.name) + '</div><div class="small muted">' + (a.currency || 'CNY') + '</div></div>' +
+      '<span class="muted">›</span></button>').join('')
+    openSheet(html)
+    $('#baClose').addEventListener('click', closeSheet)
+    $$('[data-bacc]', $('#sheet')).forEach(b => {
+      b.addEventListener('click', () => {
+        const id = idNum(b.getAttribute('data-bacc'))
+        closeSheet()
+        batchUpdate({ account_id: id }, '改账户')
+      })
+    })
+  }
+
+  /* 批量写入：逐条走既有方法（自带同步队列与幂等），失败计数后统一汇报，
+     不因为中间一条失败就丢弃整批 —— 用户最怕「点了一次，改了一半还不知道」。 */
+  async function batchUpdate(patch, label) {
+    const ids = Array.from(batch.sel).map(Number)
+    if (!ids.length) return
+    const total = ids.length
+    let ok = 0
+    const failed = []
+    toast('正在' + label + ' 0/' + total)
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        await S.updateTransaction(ids[i], Object.assign({}, patch))
+        ok++
+      } catch (e) { failed.push(ids[i]) }
+      if (i % 10 === 9) toast('正在' + label + ' ' + (i + 1) + '/' + total)
+    }
+    batch = { on: false, sel: new Set() }
+    syncBatchBar()
+    if (failed.length) {
+      toast(label + '完成 ' + ok + ' 笔，' + failed.length + ' 笔失败（多为网络问题，可稍后重试）')
+    } else {
+      toast('已' + label + ' ' + ok + ' 笔')
+    }
+    window.App.refresh()
+  }
+
+  async function batchDelete() {
+    const ids = Array.from(batch.sel).map(Number)
+    if (!ids.length) return
+    if (!(await confirmSheet({
+      title: '批量删除', danger: true, okText: '删除 ' + ids.length + ' 笔',
+      body: '将把选中的 ' + ids.length + ' 笔账目移入回收站，之后可以随时恢复。确定继续？',
+    }))) return
+    let ok = 0
+    const failed = []
+    for (const id of ids) {
+      try { await S.deleteTransaction(id); ok++ } catch (e) { failed.push(id) }
+    }
+    batch = { on: false, sel: new Set() }
+    syncBatchBar()
+    toast(failed.length ? ('已删除 ' + ok + ' 笔，' + failed.length + ' 笔失败') : ('已移入回收站 ' + ok + ' 笔'))
+    window.App.refresh()
+  }
+
+  function idNum(v) { return /^\d+$/.test(String(v)) ? Number(v) : v }
 
   /* 常用筛选只保存条件；账本和日期始终使用应用时当前选择。 */
   function savedFilterKey() {
@@ -1104,7 +1338,11 @@ window.UI = (function () {
     const fActive = !!(f.tag || f.minAmount || f.maxAmount)
     const filterBtn = '<button class="chip filter-tool' + (st.filterOpen || fActive ? ' on' : '') +
       '" data-fpanel="1" aria-label="筛选" aria-expanded="' + (st.filterOpen ? 'true' : 'false') + '">' +
-      ic('filter') + '</button>'
+      ic('filter') + '</button>' +
+      /* 多选（B3）：和「筛选」一样属于工具而不是过滤条件，放搜索行做图标按钮。
+         放 chips 行会被 390px 的右缘裁掉，放筛选面板里又没人找得到。 */
+      '<button class="chip filter-tool' + (batch.on ? ' on' : '') + '" data-batch="1" aria-label="批量编辑" aria-pressed="' + (batch.on ? 'true' : 'false') + '">' +
+      ic('list') + '</button>'
     const accs = S.accounts()
     const accChips = accs.length > 1 && (st.filterOpen || f.accountId)
       ? '<div class="chips" style="margin-top:8px">' +
@@ -1164,6 +1402,10 @@ window.UI = (function () {
 
   /* 明细页工具入口：相册 / 标签 / 报表中心 */
   function bindHomeTools() {
+    $$('[data-batch]').forEach(b => b.addEventListener('click', () => {
+      if (batch.on) { batch = { on: false, sel: new Set() }; repaintBatch() }
+      else startBatch()
+    }))
     const sfSave = $('#savedFilterSave')
     if (sfSave) sfSave.addEventListener('click', () => {
       const name = prompt('为当前筛选命名（仅保存在本机）')
@@ -1181,11 +1423,11 @@ window.UI = (function () {
       } catch (e) { toast(e.message) }
     })
     const sfDelete = $('#savedFilterDelete')
-    if (sfDelete) sfDelete.addEventListener('click', () => {
+    if (sfDelete) sfDelete.addEventListener('click', async () => {
       try {
         const name = $('#savedFilterSelect').value
         if (!name) throw new Error('请先选择常用筛选')
-        if (!confirm('删除常用筛选「' + name + '」？')) return
+        if (!(await confirmSheet({ title: '删除常用筛选', danger: true, okText: '删除', body: '删除常用筛选「' + name + '」？' }))) return
         savedFilterDelete(name); toast('已删除常用筛选'); window.App.renderTab()
       } catch (e) { toast(e.message) }
     })
@@ -1841,7 +2083,7 @@ window.UI = (function () {
     $$('#content [data-gdel]').forEach(b => {
       b.addEventListener('click', async () => {
         const gid = Number(b.getAttribute('data-gdel'))
-        if (!confirm('删除这个攒钱目标？')) return
+        if (!(await confirmSheet({ title: '删除目标', body: '删除这个攒钱目标？', danger: true, okText: '删除' }))) return
         await S.deleteGoal(gid)
         setGoalLink(gid, null)
         toast('已删除')
@@ -2061,13 +2303,6 @@ window.UI = (function () {
     /* 周期补记的账目数：只取 total，不拉正文 */
     const autoN = await S.listTransactions({ tag: 'auto', limit: 1 }).then(r => r.total || 0).catch(() => 0)
 
-    /* 顶层聚合入口：把「数据在哪儿 / 怎么不丢」收成一页，随时可查 */
-    const syncHubCard = '<div class="card" style="padding:0">' +
-      '<div class="list-item" id="syncHubBtn"><div class="ico">' + (isGuest ? '' + ic('smartphone') + '' : '' + ic('cloud') + '') + '</div>' +
-      '<div class="grow"><div>账号与同步</div>' +
-      '<div class="small muted">' + (isGuest ? '数据只在本机 · 登录可跨设备同步' : '数据已绑账号 · 换设备前请确认同步完成') +
-      '</div></div><span class="muted">›</span></div></div>'
-
     /* 我的页重排（P1-5）：39 项平铺 4.3 屏、没有分组标题，找「加密备份」要滑很久。
        现在按五组归类（记账设置 / 账户与预算 / 报表与凭证 / 数据与安全 / 外观与提醒
        / 帮助与关于），演示与开发项收进折叠的「高级」。 */
@@ -2078,6 +2313,14 @@ window.UI = (function () {
       '</div><span class="muted"' + (labelId ? ' id="' + labelId + '"' : '') + '>' + (label || '›') + '</span></div>'
     const grp = (title, items) => '<div class="me-group"><div class="grp-title">' + title + '</div>' +
       '<div class="card" style="padding:0">' + items.join('') + '</div></div>'
+    /* 可折叠分组（C4）：「我的」页 7 组平铺要滑 2~3 屏，找备份/锁屏要滑很久。
+       记账设置、账户与预算、数据与安全这三组是高频，保持展开；
+       报表与凭证、外观与提醒、帮助与关于默认收起。
+       注意用 <details> 而不是把内容从 DOM 里摘掉 —— 按钮与 id 必须继续存在，
+       既有测试和「跳到某个设置」的深链都依赖它们。 */
+    const grpFold = (title, items, open) => '<details class="me-group me-fold"' + (open ? ' open' : '') + '>' +
+      '<summary class="grp-title">' + title + '</summary>' +
+      '<div class="card" style="padding:0">' + items.join('') + '</div></details>'
 
     $('#content').innerHTML =
       backupStatusCard() +
@@ -2113,7 +2356,7 @@ window.UI = (function () {
         it('bookManage', '' + ic('book') + '', '账本管理', '多账本切换'),
         it('fxSettingsBtn', '' + ic('exchange') + '', '汇率与基准币种', '多币种账户折算 · 当前基准 <b id="fxBaseLabel">¥ CNY</b>', 'fxSub'),
       ]) +
-      grp('报表与凭证', [
+      grpFold('报表与凭证', [
         it('reportCenterBtn', '' + ic('chart-bar') + '', '报表中心', '财务健康度 · 年同比 · 分类趋势 · 海报'),
         it('reportBtn', '' + ic('printer') + '', '生成月度报表', '海报 / PDF'),
         it('galleryBtn', '' + ic('image') + '', '凭证相册', '所有小票的图片墙'),
@@ -2130,13 +2373,13 @@ window.UI = (function () {
         it('shareBtn', '' + ic('users') + '', '共享账本', '加密发布 / 用共享码加入'),
         it('lockBtn', '' + ic('lock') + '', '应用锁', '打开 App 时输入 4 位 PIN', '', '›', 'lockLabel'),
       ]) +
-      grp('外观与提醒', [
+      grpFold('外观与提醒', [
         it('themeBtn', '' + ic('palette') + '', '外观 · 深色模式', '跟随系统 / 常亮 / 常暗', '', '›', 'themeModeLabel'),
         it('uiBtn', '' + ic('sliders') + '', '界面与配色', '字号大小 · 涨跌配色', '', '›', 'uiModeLabel'),
         it('remindBtn', '' + ic('clock') + '', '每日记账提醒', '到点还没记账就提醒一次'),
         it('installBtn', '' + ic('smartphone') + '', '添加到主屏幕', '像 App 一样打开，离线也能记账', 'installSub'),
       ]) +
-      grp('帮助与关于', [
+      grpFold('帮助与关于', [
         it('helpBtn', '' + ic('book') + '', '新手指引 · 使用帮助', '3 分钟上手，含快捷键与常见问题'),
         it('privacyBtn2', '' + ic('shield') + '', '用户隐私保护指引', '我们收集什么、怎么用、你有哪些权利'),
         it('aboutBtn', '' + ic('info') + '', '关于拾光记账', '版本 · 数据与隐私说明', 'aboutSub'),
@@ -2266,12 +2509,12 @@ window.UI = (function () {
       uil.textContent = parts.length ? parts.join(' · ') : '›'
     }
     $('#seedBtn').addEventListener('click', async () => {
-      if (!confirm('会在现有分类之外补充一套推荐分类，确定继续？')) return
+      if (!(await confirmSheet({ title: '补充推荐分类', body: '会在现有分类之外补充一套推荐分类，确定继续？' }))) return
       try { await S.seedPresets(); toast('已补充推荐分类'); window.App.renderTab() } catch (e) { toast('操作失败') }
     })
     if (!isGuest) {
       $('#logoutBtn').addEventListener('click', async () => {
-        if (!confirm('退出后需要重新验证手机号才能查看账目，确定退出？')) return
+        if (!(await confirmSheet({ title: '退出登录', body: '退出后需要重新验证手机号才能查看账目，确定退出？', danger: true, okText: '退出' }))) return
         await window.Cloud.signOut()
         location.reload()
       })
@@ -2305,8 +2548,9 @@ window.UI = (function () {
     const n = rows.length
     if (!n) { toast('没有需要撤销的自动补记账目'); return }
     const sample = rows.slice(0, 3).map(t => '· ' + F.isoDay(t.occurred_at) + ' ' + (t.note || '周期账目') + ' ¥' + F.yuan(F.toCents(t.amount)))
-    if (!confirm('将删除 ' + n + ' 笔由周期规则自动补记的账目（手工记的不受影响）：\n\n' + sample.join('\n') +
-      (n > 3 ? '\n· 另有 ' + (n - 3) + ' 笔…' : '') + '\n\n删除后可在「回收站」恢复，确定继续？')) return
+    if (!(await confirmSheet({ title: '撤销自动补记', danger: true, okText: '删除',
+      body: '将删除 ' + n + ' 笔由周期规则自动补记的账目（手工记的不受影响）：\n\n' + sample.join('\n') +
+        (n > 3 ? '\n· 另有 ' + (n - 3) + ' 笔…' : '') + '\n\n删除后可在「回收站」恢复，确定继续？' }))) return
     let ok = 0
     for (const t of rows) {
       try { await S.deleteTransaction(t.id); ok++ } catch (e) { /* 单条失败继续 */ }
@@ -2365,15 +2609,67 @@ window.UI = (function () {
     })
   }
 
+  /* ---------- 本机覆盖层备份（A3） ----------
+     报销进度、对账标记、目标↔账户联动、预算结转、智能规则、自定义汇率这些
+     "第二层数据"只存在 localStorage，既不进 IndexedDB 也不进云表 ——
+     换手机时用户精心维护的报销进度会悄悄归零。这里按【前缀白名单】
+     把它们一起写进备份文件，恢复时再写回去。
+     必须是白名单：PIN 哈希（ledger10_lock）、分享密钥（ledger10_shares）、
+     同步队列（ledger10_sync2:*）绝对不能进备份文件。 */
+  const OVERLAY_PREFIX = [
+    'ledger10_reimb',                /* 旧版报销进度（无命名空间） */
+    'ledger10_reimb_v2',             /* 现行报销进度，键名带 :[mode,owner] 命名空间 */
+    'ledger10_reconcile_marks_v1',   /* 对账标记 */
+    'ledger10_recon_log',
+    'ledger10_goallink',             /* 目标 ↔ 账户联动 */
+    'ledger10_goalauto',
+    'ledger10_rollover',             /* 预算结转 */
+    'ledger10_rules',                /* 智能分类规则 */
+    'ledger10_fx',                   /* 自定义汇率 */
+    'ledger10_saved_filters_v1',
+    'ledger10_lastpick',
+    'ledger10_import_accounts_v1',
+    'ledger10_debt_rate',
+  ]
+  const OVERLAY_MAX = 200000          /* 单键上限，防止把超大 JSON 塞进备份 */
+  function isOverlayKey(k) {
+    return OVERLAY_PREFIX.some(p => k === p || k.indexOf(p + ':') === 0)
+  }
+  function collectOverlays() {
+    const out = {}
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (!k || !isOverlayKey(k)) continue
+        const v = localStorage.getItem(k)
+        if (typeof v === 'string' && v.length <= OVERLAY_MAX) out[k] = v
+      }
+    } catch (e) { /* 无存储权限（隐私模式）：跳过，不影响主备份 */ }
+    return out
+  }
+  function applyOverlays(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return 0
+    let n = 0
+    Object.keys(obj).forEach(k => {
+      if (!isOverlayKey(k)) return
+      const v = obj[k]
+      if (typeof v !== 'string' || v.length > OVERLAY_MAX) return
+      try { localStorage.setItem(k, v); n++ } catch (e) { /* 忽略单键失败 */ }
+    })
+    return n
+  }
+
   /* ---------- JSON 备份 / 恢复 ---------- */
   function openBackupSheet() {
     const isGuest = window.DB.mode === 'guest'
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">JSON 备份 / 恢复</span><button id="bakClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin-bottom:12px">' +
-      (isGuest ? '游客数据只存在本机，建议定期备份。备份包含账目、图片、账本、预算和目标等，不包含仅存本机的报销进度及对账标记。'
-               : '此备份包含账目、账户、分类、账本、预算、周期规则和目标，不包含云端图片、模板、回收站账目、仅存本机的报销进度及对账标记。请另行保存重要凭证原图。') + '</div>' +
-      '<button class="btn block" id="bakExport">导出备份文件</button>' +
+      (isGuest ? '备份包含账目、图片、账本、预算、目标，以及报销进度、对账标记、预算结转等本机设置。'
+               : '备份包含账目、账户、分类、账本、预算、周期规则、目标，以及报销进度、对账标记等本机设置。') +
+      '<b>不含凭证图片文件</b>（' + (isGuest ? '游客模式的图片已内联在文件里' : '云端图片请用「加密备份到云端」另存') + '）、模板、回收站账目。' +
+      '</div>' +
+      '<button class="btn block" id="bakExport">导出账目备份</button>' +
       '<div class="divider">恢复</div>' +
       '<input type="file" id="bakFile" accept=".json,application/json" class="hidden">' +
       '<button class="btn line block" id="bakImport">选择备份文件并恢复</button>' +
@@ -2386,6 +2682,7 @@ window.UI = (function () {
         let payload
         if (isGuest) {
           payload = await window.GuestStore.backup()
+          payload.overlays = collectOverlays()
         } else {
           const txns = await S.listTransactions({ limit: 100000, ignoreBook: true })
           if (!txns || !Array.isArray(txns.rows) || (Number.isFinite(txns.total) && txns.total > txns.rows.length)) {
@@ -2401,7 +2698,7 @@ window.UI = (function () {
             books: S.books(),
             goals: S.state.goals,
           }
-          payload = { app: 'ledger10', version: 2, exportedAt: F.iso(new Date()), data: dump }
+          payload = { app: 'ledger10', version: 2, exportedAt: F.iso(new Date()), data: dump, overlays: collectOverlays() }
         }
         const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' })
         const a = document.createElement('a')
@@ -2421,15 +2718,18 @@ window.UI = (function () {
         const text = await file.text()
         const payload = JSON.parse(text)
         if (isGuest) {
-          if (!confirm('恢复会覆盖本机现有游客数据，确定继续？')) return
+          if (!(await confirmSheet({ title: '恢复备份', danger: true, okText: '覆盖恢复', body: '恢复会覆盖本机现有游客数据，确定继续？' }))) return
           const r = await window.GuestStore.restore(payload)
+          /* 覆盖层要在 init 之前写回：init 之后首页可能立刻渲染报销角标 */
+          const nOv = applyOverlays(payload && payload.overlays)
           await S.useGuest()
-          toast('已恢复 ' + r.txns + ' 笔账目')
+          toast('已恢复 ' + r.txns + ' 笔账目' + (nOv ? '，含 ' + nOv + ' 项本机设置' : ''))
         } else {
-          if (!confirm('会把备份内容合并进当前云端账号（重复的账户/分类自动跳过），确定继续？')) return
+          if (!(await confirmSheet({ title: '恢复备份', okText: '合并导入', body: '会把备份内容合并进当前云端账号（重复的账户/分类自动跳过），确定继续？' }))) return
           const data = payload && payload.data ? payload.data : payload
           const r = await window.DB.importDumpToCloud(data, m => toast(m))
-          toast('已导入 ' + r.txns + ' 笔账目')
+          const nOv = applyOverlays(payload && payload.overlays)
+          toast('已导入 ' + r.txns + ' 笔账目' + (nOv ? '，含 ' + nOv + ' 项本机设置' : ''))
         }
         closeSheet()
         window.App.refresh()
@@ -2808,14 +3108,67 @@ window.UI = (function () {
   }
 
   /* 安全四则运算：只允许数字与 + - * / ( ) . 空格 */
+  /* 表达式金额求值（B4）
+     ------------------------------------------------------------------
+     原来用 Function('return (表达式)') 求值，虽然前面有字符白名单挡着注入，
+     但它是整站无法启用严格 CSP 的唯一原因（需要 unsafe-eval）。这里换成
+     自研递归下降解析器，行为与原实现一致：
+       expr   := term (('+'|'-') term)*
+       term   := unary (('*'|'/') unary)*
+       unary  := ('+'|'-') unary | primary
+       primary:= number | '(' expr ')'
+     任何非法输入、除零、残留字符一律返回 NaN（调用方按「不是合法金额」处理）。 */
   function evalAmount(expr) {
     /* 自研键盘输出的是 × ÷ −（跟主流记账 App 一致，可读性更好），
-       求值前统一归一化成 JS 能算的符号。 */
-    const s = String(expr || '').trim().replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-')
-    if (!s) return NaN
-    if (!/^[0-9+\-*/().\s]+$/.test(s)) return NaN
+       求值前统一归一化成 ASCII 运算符。 */
+    const raw = String(expr || '').trim().replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-')
+    if (!raw) return NaN
+    if (!/^[0-9+\-*/().\s]+$/.test(raw)) return NaN
+    const text = raw.replace(/\s+/g, '')
+    let i = 0
+    const peek = () => (i < text.length ? text[i] : '')
+    function num() {
+      const start = i
+      while (i < text.length && /[0-9.]/.test(text[i])) i++
+      if (start === i) throw new Error('expr')
+      const v = Number(text.slice(start, i))
+      if (!isFinite(v)) throw new Error('expr')
+      return v
+    }
+    function primary() {
+      if (peek() === '(') {
+        i++
+        const v = sum()
+        if (peek() !== ')') throw new Error('expr')
+        i++
+        return v
+      }
+      return num()
+    }
+    function unary() {
+      if (peek() === '-') { i++; return -unary() }
+      if (peek() === '+') { i++; return unary() }
+      return primary()
+    }
+    function term() {
+      let v = unary()
+      for (;;) {
+        const c = peek()
+        if (c === '*') { i++; v *= unary() } else if (c === '/') { i++; v /= unary() } else break
+      }
+      return v
+    }
+    function sum() {
+      let v = term()
+      for (;;) {
+        const c = peek()
+        if (c === '+') { i++; v += term() } else if (c === '-') { i++; v -= term() } else break
+      }
+      return v
+    }
     try {
-      const v = Function('"use strict"; return (' + s + ')')()
+      const v = sum()
+      if (i !== text.length) return NaN     /* 末尾还有没吃掉的字符 → 不合法 */
       if (typeof v !== 'number' || !isFinite(v)) return NaN
       return Math.round(v * 100) / 100
     } catch (e) { return NaN }
@@ -3281,7 +3634,7 @@ window.UI = (function () {
     if (editingId) {
       $('#edDup').addEventListener('click', () => saveEditor(editingId, true))
       $('#edDelete').addEventListener('click', async () => {
-        if (!confirm('删除后会进入回收站，可随时恢复，确定删除？')) return
+        if (!(await confirmSheet({ title: '删除账目', danger: true, okText: '删除', body: '删除后会进入回收站，可随时恢复，确定删除？' }))) return
         await S.deleteTransaction(editingId)
         closeSheet(true)
         toast('已移入回收站')
@@ -3571,7 +3924,7 @@ window.UI = (function () {
     $$('#sheet [data-tpldel]').forEach(b => {
       b.addEventListener('click', async (e) => {
         e.stopPropagation()
-        if (!confirm('删除该模板？')) return
+        if (!(await confirmSheet({ title: '删除模板', danger: true, okText: '删除', body: '删除该模板？' }))) return
         await S.deleteTemplate(Number(b.getAttribute('data-tpldel')))
         openTemplatePicker()
       })
@@ -3611,8 +3964,6 @@ window.UI = (function () {
   const OPERATOR = String(APP_INFO.operator || '').trim()
   const CONTACT = String(APP_INFO.contact || '').trim()
   /* 隐私指引 / 用户协议同样搬进 js/legal.js */
-  function privacyHtml() { return '' }
-  function termsHtml() { return '' }
   function openPrivacy() { return Lazy.need('legal').then(m => m && m.openPrivacy()) }
   function openTerms() { return Lazy.need('legal').then(m => m && m.openTerms()) }
 
@@ -3645,7 +3996,7 @@ window.UI = (function () {
   }
 
   return {
-    $, $$, toast, openSheet, closeSheet, lightbox, ic, animateFeedback,
+    $, $$, toast, openSheet, closeSheet, lightbox, ic, animateFeedback, confirmSheet,
     savedFilterList, savedFilterSave, savedFilterApply, savedFilterDelete, pendingBanner, reimbStatusOf, writeReimb, reimbPending, legacyReimbNotice,
     renderOverview, renderHome, renderStats, renderAssets, renderMe, ledgerEmpty,
     openEditor, loadMore, periodRange, periodTitle, openPeriodPicker,
@@ -3657,10 +4008,12 @@ window.UI = (function () {
     openHelp, openInstallGuide, openAbout, openDemoData,
     openPrivacy, openTerms, needConsent, markConsent,
     openSyncHub, replayOnboard, exportCsv,
+    collectOverlays, applyOverlays,
   }
 })()
 
-/* 各模块直接调 ic()，挂全局别名 */
+/* 各模块直接调 ic() / confirmSheet()，挂全局别名 */
 window.ic = window.UI.ic
+window.confirmSheet = window.UI.confirmSheet
 
 

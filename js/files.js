@@ -229,7 +229,7 @@
       else window.open(url, '_blank', 'noopener')
     })
     $('#fdDel').addEventListener('click', async () => {
-      if (!confirm('删除这个文件？删除后无法恢复')) return
+      if (!(await confirmSheet({ title: '删除文件', danger: true, okText: '删除', body: '删除这个文件？删除后无法恢复' }))) return
       try {
         await S.removeAttachment(a.id, a.storage_path)
         dropMeta(a.id)
