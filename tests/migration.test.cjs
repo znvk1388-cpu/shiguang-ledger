@@ -235,3 +235,95 @@ test('verified legacy attachment progress is reused without uploading duplicate 
   assert.equal(user.attachments.length, 1)
   assert.equal(h.controls.uploads, 0)
 })
+
+function cloudSelfDump() {
+  return guestDump({
+    sourceId: 'cloud:A',
+    transactions: [{ ...guestDump().transactions[0], tags: ['午餐'], reimbursable: true, deleted_at: null }],
+    recurring: [{ ...guestDump().transactions[0], id: 2, tags: ['固定'], freq: 'monthly', start_date: '2026-10-24', last_run_date: null, active: true }],
+    goals: [{ id: 3, name: '旅行', book_id: 1, target_amount: 100, saved_amount: 10 }],
+    templates: [{ ...guestDump().transactions[0], id: 4, name: '午饭', amount: 10 }],
+  })
+}
+
+function seedSelfCloud(h, dump = cloudSelfDump(), uid = 'A') {
+  h.use(uid)
+  const user = h.users.get(uid)
+  for (const table of ['accounts', 'categories', 'books', 'goals', 'templates', 'transactions']) user[table] = structuredClone(dump[table])
+  user.recurring_rules = structuredClone(dump.recurring)
+  return user
+}
+
+test('restoring a cloud backup to its source account reuses original transactions and recurring rules without migration tags', async () => {
+  const dump = cloudSelfDump(), h = harness(dump), user = seedSelfCloud(h, dump)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await h.api.importDumpToCloud(dump)
+    assert.equal(user.transactions.length, 1)
+    assert.equal(user.recurring_rules.length, 1)
+    assert.equal(result.txnMap[1], 1)
+    assert.equal(result.ruleMap[2], 2)
+    assert.equal(result.txnRows[1].id, 1)
+    assert.equal(result.txnFail.length, 0)
+    assert.equal(result.ruleFail.length, 0)
+  }
+  assert.deepEqual(user.transactions[0].tags, ['午餐'], 'restoring must not mutate the original row to establish identity')
+})
+
+test('same-source entity IDs survive destination edits without cloning accounts, books, categories, goals or templates', async () => {
+  const dump = cloudSelfDump(), h = harness(dump), user = seedSelfCloud(h, dump)
+  user.accounts[0].name = '改名现金'; user.accounts[0].initial_balance = 300
+  user.books[0].name = '改名账本'; user.categories[0].name = '改名分类'
+  user.goals[0].saved_amount = 60; user.goals[0].name = '改名旅行'
+  user.templates[0].amount = 20; user.templates[0].name = '改名午饭'
+  const result = await h.api.importDumpToCloud(dump)
+  for (const table of ['accounts', 'books', 'categories', 'goals', 'templates', 'transactions']) assert.equal(user[table].length, 1, table)
+  assert.equal(result.accMap[1], 1); assert.equal(result.catMap[1], 1); assert.equal(result.bookMap[1], 1)
+  assert.equal(result.goalMap[3], 3); assert.equal(result.tplMap[4], 4)
+  assert.equal(user.accounts[0].initial_balance, 300); assert.equal(user.goals[0].saved_amount, 60)
+})
+
+test('same-source transaction and recurring payload conflicts preserve current data and omit successful mappings', async () => {
+  const dump = cloudSelfDump(), h = harness(dump), user = seedSelfCloud(h, dump)
+  user.transactions[0].amount = 80; user.recurring_rules[0].amount = 90
+  const result = await h.api.importDumpToCloud(dump)
+  assert.equal(user.transactions.length, 1); assert.equal(user.recurring_rules.length, 1)
+  assert.equal(user.transactions[0].amount, 80); assert.equal(user.recurring_rules[0].amount, 90)
+  assert.equal(result.txnMap[1], undefined); assert.equal(result.txnRows[1], undefined); assert.equal(result.ruleMap[2], undefined)
+  assert.match(result.txnFail[0].msg, /冲突/); assert.match(result.ruleFail[0].msg, /冲突/)
+})
+
+test('same-source changes to user tags or soft deletion are payload conflicts', async () => {
+  for (const mutation of [row => { row.tags = ['不同标签'] }, row => { row.deleted_at = '2026-11-12T00:00:00Z' }]) {
+    const dump = cloudSelfDump(), h = harness(dump), user = seedSelfCloud(h, dump)
+    mutation(user.transactions[0])
+    const result = await h.api.importDumpToCloud(dump)
+    assert.equal(user.transactions.length, 1)
+    assert.equal(result.txnMap[1], undefined)
+    assert.match(result.txnFail[0].msg, /冲突/)
+  }
+})
+
+test('same-source failed reads never become inserts, while missing original IDs use the existing idempotent restore path', async () => {
+  const dump = cloudSelfDump(), h = harness(dump), user = seedSelfCloud(h, dump)
+  h.controls.failReads = true
+  let result = await h.api.importDumpToCloud(dump)
+  assert.equal(user.transactions.length, 1); assert.equal(user.recurring_rules.length, 1)
+  assert.equal(result.txnMap[1], undefined); assert.equal(result.ruleMap[2], undefined)
+  assert.equal(result.txnFail.length, 1); assert.equal(result.ruleFail.length, 1)
+  h.controls.failReads = false; user.transactions.length = 0; user.recurring_rules.length = 0
+  result = await h.api.importDumpToCloud(dump)
+  const restoredId = result.txnMap[1], restoredRuleId = result.ruleMap[2]
+  assert.ok(restoredId); assert.ok(restoredRuleId)
+  result = await h.api.importDumpToCloud(dump)
+  assert.equal(user.transactions.length, 1); assert.equal(user.recurring_rules.length, 1)
+  assert.equal(result.txnMap[1], restoredId); assert.equal(result.ruleMap[2], restoredRuleId)
+})
+
+test('matching numeric IDs from another cloud account never claim that account\'s existing transactions or recurring rules', async () => {
+  const dump = cloudSelfDump(), h = harness(dump), user = seedSelfCloud(h, dump, 'B')
+  const result = await h.api.importDumpToCloud(dump)
+  assert.equal(user.transactions.length, 2); assert.equal(user.recurring_rules.length, 2)
+  assert.notEqual(result.txnMap[1], 1); assert.notEqual(result.ruleMap[2], 2)
+  await h.api.importDumpToCloud(dump)
+  assert.equal(user.transactions.length, 2); assert.equal(user.recurring_rules.length, 2)
+})

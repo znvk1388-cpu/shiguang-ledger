@@ -29,3 +29,37 @@ test('precached list has no duplicated or missing entries', async () => {
     assert.ok(list.includes('./' + src.replace(/^\.\//, '')), '首屏脚本未预缓存：' + src)
   }
 })
+
+test('cache hash ignores CRLF versus LF in text assets', async () => {
+  const mod = await import('../tools/sw-version.mjs')
+  const shots = path.join(__dirname, '..', 'shots')
+  fs.mkdirSync(shots, { recursive: true })
+  const fixture = fs.mkdtempSync(path.join(shots, '.sw-version-test-'))
+  const source = "const CORE_SHELL = ['./index.html']; const CORE_LAZY = ['./image.png']"
+  try {
+    fs.writeFileSync(path.join(fixture, 'index.html'), '<html>\n中文\n</html>\n')
+    fs.writeFileSync(path.join(fixture, 'image.png'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]))
+    const lf = mod.computeCacheName(source, fixture)
+    fs.writeFileSync(path.join(fixture, 'index.html'), '<html>\r\n中文\r\n</html>\r\n')
+    assert.equal(mod.computeCacheName(source, fixture), lf, '文本换行不应受 checkout 平台影响')
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('cache hash preserves every binary byte including PNG CRLF sequences', async () => {
+  const mod = await import('../tools/sw-version.mjs')
+  const shots = path.join(__dirname, '..', 'shots')
+  fs.mkdirSync(shots, { recursive: true })
+  const fixture = fs.mkdtempSync(path.join(shots, '.sw-version-test-'))
+  const source = "const CORE_SHELL = ['./index.html']; const CORE_LAZY = ['./image.png']"
+  try {
+    fs.writeFileSync(path.join(fixture, 'index.html'), '<html>\n</html>\n')
+    fs.writeFileSync(path.join(fixture, 'image.png'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]))
+    const original = mod.computeCacheName(source, fixture)
+    fs.writeFileSync(path.join(fixture, 'image.png'), Buffer.from([137, 80, 78, 71, 10, 26, 10, 0]))
+    assert.notEqual(mod.computeCacheName(source, fixture), original, 'PNG 二进制变化必须更新缓存版本')
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true })
+  }
+})

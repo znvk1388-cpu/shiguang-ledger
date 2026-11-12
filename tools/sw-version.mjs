@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, extname } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const SW_PATH = join(ROOT, 'sw.js')
@@ -45,7 +45,9 @@ export function computeCacheName(source, root) {
     }
     hash.update(rel)
     hash.update('\u0000')
-    hash.update(buf)
+    // Git checkout 可能转换文本换行；图片等二进制必须逐字节参与哈希。
+    hash.update(/\.(?:html?|css|[cm]?js|json|svg|txt|xml|webmanifest)$/i.test(extname(rel))
+      ? buf.toString('utf8').replace(/\r\n/g, '\n') : buf)
     hash.update('\u0000')
   }
   return 'ledger10-' + hash.digest('hex').slice(0, 12)

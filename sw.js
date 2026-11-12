@@ -2,7 +2,7 @@
 /* CACHE 由 `npm run stamp`（tools/sw-version.mjs）按全部静态资源的哈希自动写入。
    不要手改这一行：tests/sw-version.test.cjs 会校验它与当前文件内容一致，
    忘记重新盖章会直接测试失败 —— 手改版本号漏改导致线上跑旧资源的老问题就这么封住了。 */
-const CACHE = 'ledger10-1a736f8e35d9'
+const CACHE = 'ledger10-7e89333a5fea'
 
 /* 首屏必需：index.html 里 <script defer> 引的那些 + 样式 + 图标。
    串行安装时按这个顺序先装，中途断网也能离线启动。 */
