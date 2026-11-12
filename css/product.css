@@ -335,3 +335,19 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 
 /* 表单存在待处理错误时，短时通知让位于持续失败说明。 */
 .editor-sheet.on:has(#edErr:not(:empty)) ~ .toast { visibility:hidden; }
+
+/* 确认浮层保留父面板与草稿，背景由独立 inert 快照管理。 */
+.confirm-layer { position:fixed; inset:0; z-index:90; background:rgba(16,24,40,.45); display:flex; align-items:center; justify-content:center; padding:20px; }
+.confirm-dialog { width:100%; max-width:420px; max-height:calc(100dvh - 40px); overflow-y:auto; overscroll-behavior:contain; padding:20px; border:1px solid var(--line); border-radius:var(--r-lg); background:var(--card); color:var(--text); box-shadow:0 16px 48px rgba(0,0,0,.18); }
+.confirm-body { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; margin:2px 0 18px; }
+.confirm-dialog .row { gap:8px; }
+.confirm-dialog .btn { min-height:44px; }
+
+/* 为多选条留出真实高度，最后一笔也能滚到工具栏上方。 */
+.batch-active #content { padding-bottom:calc(var(--batch-height,100px) + 24px); }
+.batch-bar .btn { min-height:44px; }
+@media (min-width:760px) and (max-width:1279px) and (min-height:560px) { .batch-bar { left:88px; bottom:0; max-width:none; border-radius:0; padding-bottom:calc(10px + var(--safe-b)); } }
+@media (min-width:1280px) and (min-height:560px) { .batch-bar { padding-bottom:calc(10px + var(--safe-b)); } }
+
+.batch-active:not(.sheet-open) .toast { bottom:calc(var(--batch-height,100px) + 76px + var(--safe-b)); }
+@media (min-width:760px) and (min-height:560px) { .batch-active:not(.sheet-open) .toast { bottom:calc(var(--batch-height,100px) + 20px + var(--safe-b)); } }

@@ -101,6 +101,12 @@ window.Migrate = (function () {
     return (r.data && r.data[0]) || null
   }
 
+  async function findById(table, id) {
+    const r = await window.Cloud.cloud.database.from(table).select('*').eq('id', id).limit(1)
+    if (r.error) throw r.error
+    return (r.data && r.data[0]) || null
+  }
+
   function samePayload(row, payload, rule) {
     const fields = ['txn_type', 'amount', 'account_id', 'to_account_id', 'category_id', 'note', 'book_id', 'reimbursable']
     if (rule) fields.push('freq', 'start_date', 'last_run_date', 'active')
@@ -116,6 +122,11 @@ window.Migrate = (function () {
       return k.indexOf('date') >= 0 ? left.slice(0, 10) === right.slice(0, 10) : left === right
     })
   }
+  function sameBackupPayload(row, payload, rule) {
+    const tags = value => JSON.stringify((value || []).filter(tag => String(tag).slice(0, OP.length) !== OP).slice().sort())
+    return samePayload(row, payload, rule) && tags(row.tags) === tags(payload.tags) &&
+      (rule || String(row.deleted_at || '') === String(payload.deleted_at || ''))
+  }
   function idMap(value) { return Object.assign(Object.create(null), value && typeof value === 'object' ? value : {}) }
 
   /* 把一份本机 dump 导入云端；可重复执行，已导入的会被跳过 */
@@ -125,6 +136,8 @@ window.Migrate = (function () {
     if (!dump || !Array.isArray(dump.transactions)) throw new Error('备份文件格式不正确')
     const uid = targetUid()
     if (!uid || uid === 'guest') throw new Error('请先登录目标账号，再迁移数据')
+    const sameCloud = dump.sourceId === 'cloud:' + uid
+    const originalEntity = (rows, id, used) => sameCloud ? (rows || []).find(x => String(x.id) === String(id) && !used.has(x.id)) : null
     const source = await sourceIdentity(dump)
     const j = journal(uid, source)
     j.targetUid = uid
@@ -146,6 +159,7 @@ window.Migrate = (function () {
     const previousImages = idMap(j.imgMap)
     const previousUploads = idMap(j.imgUploads)
     j.txnMap = idMap()
+    const txnRows = idMap()
     j.ruleMap = idMap()
     j.imgMap = idMap()
     j.imgUploads = previousUploads
@@ -159,7 +173,8 @@ window.Migrate = (function () {
     j.bookMap = idMap(j.bookMap)
     for (const b of (dump.books || [])) {
       checkTarget()
-      const existing = cloud.state.books.find(x => String(x.id) === String(j.bookMap[b.id]) && !usedBooks.has(x.id)) ||
+      const existing = originalEntity(cloud.state.books, b.id, usedBooks) ||
+        cloud.state.books.find(x => String(x.id) === String(j.bookMap[b.id]) && !usedBooks.has(x.id)) ||
         cloud.state.books.find(x => x.name === b.name && !usedBooks.has(x.id))
       if (existing) {
         bookMap[b.id] = existing.id
@@ -182,7 +197,8 @@ window.Migrate = (function () {
     j.accMap = idMap(j.accMap)
     for (const a of (dump.accounts || [])) {
       checkTarget()
-      const existing = cloud.allAccounts().find(x => String(x.id) === String(j.accMap[a.id]) &&
+      const existing = originalEntity(cloud.allAccounts(), a.id, usedAccounts) ||
+        cloud.allAccounts().find(x => String(x.id) === String(j.accMap[a.id]) &&
         (x.currency || 'CNY') === (a.currency || 'CNY') && !usedAccounts.has(x.id)) ||
         cloud.allAccounts().find(x => x.name === a.name && (x.currency || 'CNY') === (a.currency || 'CNY') &&
           (x.kind || 'cash') === (a.kind || 'cash') && Number(x.initial_balance || 0) === Number(a.initial_balance || 0) && !usedAccounts.has(x.id))
@@ -212,7 +228,8 @@ window.Migrate = (function () {
     const children = cats.filter(c => c.parent_id)
     for (const c of parents) {
       checkTarget()
-      const existing = cloud.state.categories.find(x => String(x.id) === String(j.catMap[c.id]) && !usedCategories.has(x.id)) ||
+      const existing = originalEntity(cloud.state.categories, c.id, usedCategories) ||
+        cloud.state.categories.find(x => String(x.id) === String(j.catMap[c.id]) && !usedCategories.has(x.id)) ||
         cloud.state.categories.find(x => x.kind === c.kind && !x.parent_id && x.name === c.name && !usedCategories.has(x.id))
       if (existing) { catMap[c.id] = existing.id; j.catMap[c.id] = existing.id; usedCategories.add(existing.id); continue }
       say('迁移分类…')
@@ -228,7 +245,8 @@ window.Migrate = (function () {
       checkTarget()
       const pid = catMap[c.parent_id]
       if (!pid) continue
-      const existing = cloud.state.categories.find(x => String(x.id) === String(j.catMap[c.id]) && !usedCategories.has(x.id)) ||
+      const existing = originalEntity(cloud.state.categories, c.id, usedCategories) ||
+        cloud.state.categories.find(x => String(x.id) === String(j.catMap[c.id]) && !usedCategories.has(x.id)) ||
         cloud.state.categories.find(x => x.kind === c.kind && x.parent_id === pid && x.name === c.name && !usedCategories.has(x.id))
       if (existing) { catMap[c.id] = existing.id; j.catMap[c.id] = existing.id; usedCategories.add(existing.id); continue }
       const row = await cloud.addCategory({
@@ -257,7 +275,9 @@ window.Migrate = (function () {
       }
       try {
         checkTarget()
-        let found = await findByOp(migOp(source, t.id))
+        /* 只有同一云账号的备份可按原ID复用；改过的现有流水不能被旧快照覆盖或复制。 */
+        let found = sameCloud ? await findById('transactions', t.id) : null
+        if (!found) found = await findByOp(migOp(source, t.id))
         if (!found && adoptLegacy && old.txnMap && old.txnMap[t.id]) {
           const candidate = await findByOp('mig-' + t.id)
           if (candidate && String(candidate.id) === String(old.txnMap[t.id]) && samePayload(candidate, payload, false)) {
@@ -267,10 +287,12 @@ window.Migrate = (function () {
           }
         }
         checkTarget()
-        if (found) { j.txnMap[t.id] = found.id; saveJournal(j); continue }
+        if (found && sameCloud && !sameBackupPayload(found, payload, false)) throw new Error('账目与备份内容冲突，已保留当前记录')
+        if (found) { j.txnMap[t.id] = found.id; txnRows[t.id] = found; saveJournal(j); continue }
         const row = await cloud.addTransaction(payload)
         if (!row || !row.id) throw new Error('云端未返回已保存账目')
         j.txnMap[t.id] = row.id
+        txnRows[t.id] = row
         saveJournal(j)
       } catch (e) {
         txnFail.push({ id: t.id, msg: (e && e.message) || '写入失败' })
@@ -344,7 +366,8 @@ window.Migrate = (function () {
       }
       try {
         checkTarget()
-        let found = await findRuleByOp(migOp(source, r.id))
+        let found = sameCloud ? await findById('recurring_rules', r.id) : null
+        if (!found) found = await findRuleByOp(migOp(source, r.id))
         if (!found && adoptLegacy && old.ruleMap && old.ruleMap[r.id]) {
           const candidate = await findRuleByOp('mig-' + r.id)
           if (candidate && String(candidate.id) === String(old.ruleMap[r.id]) && samePayload(candidate, payload, true)) {
@@ -353,6 +376,7 @@ window.Migrate = (function () {
           }
         }
         checkTarget()
+        if (found && sameCloud && !sameBackupPayload(found, payload, true)) throw new Error('周期规则与备份内容冲突，已保留当前规则')
         if (found) { j.ruleMap[r.id] = found.id; saveJournal(j); continue }
         const row = await cloud.addRecurring(payload)
         if (!row || !row.id) throw new Error('云端未返回已保存周期规则')
@@ -367,7 +391,8 @@ window.Migrate = (function () {
     j.goalMap = idMap(j.goalMap)
     for (const g of (dump.goals || [])) {
       checkTarget()
-      const existing = (cloud.state.goals || []).find(x => String(x.id) === String(j.goalMap[g.id]) && !usedGoals.has(x.id)) ||
+      const existing = originalEntity(cloud.state.goals, g.id, usedGoals) ||
+        (cloud.state.goals || []).find(x => String(x.id) === String(j.goalMap[g.id]) && !usedGoals.has(x.id)) ||
         (cloud.state.goals || []).find(x => x.name === g.name && String(x.book_id) === String(mapBook(g.book_id)) &&
           Number(x.target_amount) === Number(g.target_amount) && Number(x.saved_amount || 0) === Number(g.saved_amount || 0) && !usedGoals.has(x.id))
       if (existing) { j.goalMap[g.id] = existing.id; usedGoals.add(existing.id); continue }
@@ -391,7 +416,8 @@ window.Migrate = (function () {
       j.tplMap = idMap(j.tplMap)
       for (const t of (dump.templates || [])) {
         checkTarget()
-        const existing = (exist || []).find(x => String(x.id) === String(j.tplMap[t.id]) && !usedTemplates.has(x.id)) ||
+        const existing = originalEntity(exist, t.id, usedTemplates) ||
+          (exist || []).find(x => String(x.id) === String(j.tplMap[t.id]) && !usedTemplates.has(x.id)) ||
           (exist || []).find(x => x.name === t.name && String(x.book_id || '') === String(mapBook(t.book_id)) &&
             x.txn_type === t.txn_type && Number(x.amount || 0) === Number(t.amount || 0) &&
             String(x.account_id || '') === String(accMap[t.account_id] || '') && !usedTemplates.has(x.id))
@@ -420,7 +446,8 @@ window.Migrate = (function () {
       imgFail: imgFail,
       ruleFail: ruleFail,
       tplFail: tplFail,
-      txnMap: j.txnMap,
+      txnMap: j.txnMap, txnRows,
+      accMap, catMap, bookMap, goalMap: j.goalMap, tplMap: j.tplMap,
       imgMap: j.imgMap,
       ruleMap: j.ruleMap,
       targetUid: uid, sourceId: source,

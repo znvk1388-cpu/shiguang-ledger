@@ -134,53 +134,68 @@ window.UI = (function () {
   function editorDirty() {
     return !!$('#edSave') && editorBaseline !== null && editorSnapshot() !== editorBaseline
   }
-  /* 离开编辑器前的询问（B5 的最后一个例外，改动原因记在这里）：
-     试过把它换成 confirmSheet 异步弹层 —— 实测不行，而且不是样式问题：
-     全应用只有一层 #sheet，openSheet 会「替换」当前内容。在编辑器里弹确认层，
-     编辑器 DOM 会被整个顶掉，用户点「继续编辑」回到的是一张被清空的表单，
-     输入内容当场消失（tests/ui.test.cjs 的「保留输入」断言直接挂）。
-     要彻底解决得加第二层弹层容器（独立 mask + 焦点陷阱 + inert 叠加），
-     那是独立改动，不适合和本轮加固混在一起，因此这里继续用原生 confirm：
-     同步、不破坏 DOM，代价是样式不统一。
-     注意保留 `typeof confirm` 保护：个别 WebView 会禁用原生弹窗，
-     这种情况下直接放行关闭，避免用户被永远锁在编辑器里。 */
+  /* 关闭回调是同步 API，放弃草稿仍保留同步确认。 */
   function mayLeaveEditor() {
     if (!editorDirty()) return true
     if (typeof confirm !== 'function') return true
     return !!confirm('有尚未保存的修改，确定放弃并关闭吗？')
   }
 
-  /* 统一确认弹层（B5）
-     ------------------------------------------------------------------
-     原生 confirm 在微信内置浏览器和部分 ROM WebView 里样式突兀，可能被系统抑制，
-     也没有焦点管理。这里复用 openSheet（自带 inert 背景隔离 + 焦点还原）。
-     拿不到弹层容器的场景（单测环境、极早期调用）退回原生 confirm，
-     保证调用方逻辑不中断。返回 Promise<boolean>。 */
+  let activeConfirm = null
+  /* 确认层独立于 #sheet，取消时原面板的 DOM、草稿和监听器保持原样。 */
   function confirmSheet(opt) {
     const o = typeof opt === 'string' ? { body: opt } : (opt || {})
-    const body = String(o.body || '')
-    const title = String(o.title || '请确认')
-    const okText = String(o.okText || '确定')
-    const cancelText = String(o.cancelText || '取消')
-    const danger = !!o.danger
-    const sheet = document.getElementById('sheet')
-    if (!sheet) return Promise.resolve(typeof confirm === 'function' ? !!confirm(body || title) : false)
+    if (!$('#sheet')) return Promise.resolve(typeof confirm === 'function' ? !!confirm(o.body || o.title || '') : false)
+    if (editorSaving) return Promise.resolve(false)
+    if (activeConfirm) activeConfirm.finish(false)
     return new Promise(resolve => {
-      openSheet(
-        '<div class="sheet-head"><span class="sheet-title">' + esc(title) + '</span>' +
+      const opener = document.activeElement, wasOpen = document.body.classList.contains('sheet-open')
+      const layer = document.createElement('div')
+      layer.id = 'confirmLayer'; layer.className = 'confirm-layer'
+      layer.innerHTML = '<div id="confirmDialog" class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cfTitle" aria-describedby="cfBody" tabindex="-1">' +
+        '<div class="sheet-head"><span id="cfTitle" class="sheet-title">' + esc(o.title || '请确认') + '</span>' +
         '<button type="button" id="cfClose" class="btn sm line">关闭</button></div>' +
-        '<div class="small" style="white-space:pre-wrap;line-height:1.65;margin:2px 0 14px">' + esc(body) + '</div>' +
-        '<div class="row" style="gap:8px">' +
-        '<button type="button" class="btn line grow" id="cfNo">' + esc(cancelText) + '</button>' +
-        '<button type="button" class="btn grow' + (danger ? ' danger' : '') + '" id="cfYes">' + esc(okText) + '</button>' +
-        '</div>'
-      )
-      const done = v => { resolve(v); closeSheet() }
-      $('#cfYes').addEventListener('click', () => done(true))
-      $('#cfNo').addEventListener('click', () => done(false))
-      $('#cfClose').addEventListener('click', () => done(false))
+        '<div id="cfBody" class="small confirm-body">' + esc(o.body || '') + '</div>' +
+        '<div class="row"><button type="button" id="cfNo" class="btn line grow">' + esc(o.cancelText || '取消') + '</button>' +
+        '<button type="button" id="cfYes" class="btn grow' + (o.danger ? ' danger' : '') + '">' + esc(o.okText || '确定') + '</button></div></div>'
+      const background = Array.from(document.body.children).filter(el => !['SCRIPT', 'STYLE'].includes(el.tagName))
+        .map(el => ({ el, inert: el.hasAttribute('inert') }))
+      background.forEach(({ el }) => el.setAttribute('inert', ''))
+      document.body.appendChild(layer)
+      document.body.classList.add('sheet-open')
+      const box = $('#confirmDialog', layer)
+      let finished = false
+      const finish = value => {
+        if (finished) return
+        finished = true
+        document.removeEventListener('keydown', onKey, true)
+        layer.remove()
+        background.forEach(({ el, inert }) => { if (!inert) el.removeAttribute('inert') })
+        if (!wasOpen) document.body.classList.remove('sheet-open')
+        activeConfirm = null
+        if (opener && opener.isConnected && !opener.closest('[inert]')) opener.focus({ preventScroll: true })
+        resolve(value)
+      }
+      const onKey = e => {
+        if (e.isComposing || e.keyCode === 229) return
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); finish(false) }
+        else if (e.ctrlKey || e.metaKey) { e.stopImmediatePropagation(); if (e.key === 'Enter') e.preventDefault() }
+        else if (e.key === 'Tab') {
+          const items = $$('button:not(:disabled)', box), first = items[0], last = items[items.length - 1]
+          if (e.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) { e.preventDefault(); last.focus() }
+          else if (!e.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) { e.preventDefault(); first.focus() }
+        }
+      }
+      activeConfirm = { finish }
+      document.addEventListener('keydown', onKey, true)
+      $('#cfYes', layer).addEventListener('click', () => finish(true))
+      $('#cfNo', layer).addEventListener('click', () => finish(false))
+      $('#cfClose', layer).addEventListener('click', () => finish(false))
+      layer.addEventListener('click', e => { if (e.target === layer) finish(false) })
+      $('#cfNo', layer).focus({ preventScroll: true })
     })
   }
+
   window.addEventListener('beforeunload', e => {
     if (sheetOpen && $('#edSave') && editorBaseline !== null && editorSnapshot() !== editorBaseline) {
       e.preventDefault()
@@ -190,11 +205,12 @@ window.UI = (function () {
   function openSheet(html) {
     const sheet = $('#sheet')
     if (editorSaving) return
+    if (activeConfirm) activeConfirm.finish(false)
     const replacing = sheetOpen
     cancelFeedback(sheet)
     if (!sheetOpen) {
       sheetReturnFocus = document.activeElement
-      sheetBackground = ['#mainView', '#authView'].map(selector => $(selector)).filter(el => el && !el.contains(sheet))
+      sheetBackground = ['#mainView', '#authView', '#lockView', '#batchBar'].map(selector => $(selector)).filter(el => el && !el.contains(sheet))
         .map(el => ({ el, wasInert: el.hasAttribute('inert') }))
       sheetBackground.forEach(({ el }) => el.setAttribute('inert', ''))
     }
@@ -230,6 +246,7 @@ window.UI = (function () {
     return sheetVersion
   }
   function closeSheet(force) {
+    if (activeConfirm) { activeConfirm.finish(false); if (force !== true) return }
     if (editorSaving) return
     /* 有未保存改动时先问一句（同步守卫，见 mayLeaveEditor 的注释） */
     if (force !== true && sheetOpen && !mayLeaveEditor()) return
@@ -681,7 +698,7 @@ window.UI = (function () {
 
   async function renderHome(st) {
     /* 切到别的 Tab 时退出多选：否则批量操作条会留在统计/资产页上 */
-    if (st.tab !== 'home' && batch.on) { batch = { on: false, sel: new Set() }; syncBatchBar() }
+    syncBatchContext(st)
     const content = $('#content')
     const version = ++homeRenderVersion
     const context = homeContext(st)
@@ -1098,170 +1115,203 @@ window.UI = (function () {
      删除走 deleteTransaction —— 都是已有的同步包装方法，
      断网时自然进本地待上传队列，幂等标记也照旧生效。 */
   let batch = { on: false, sel: new Set() }
-
+  let batchObserver = null
+  function batchContext(st) { return JSON.stringify([homeContext(st), st.filters]) }
+  function endBatch() {
+    batch = { on: false, sel: new Set() }
+    repaintBatch()
+  }
+  function syncBatchContext(st) {
+    if (batch.on && (st.tab !== 'home' || batch.context !== batchContext(st))) endBatch()
+  }
+  function batchRows() {
+    return (window.App.state.txns || []).filter(t => batch.sel.has(String(t.id)))
+  }
+  function batchCategoryKind() {
+    const rows = batchRows(), kinds = new Set(rows.map(t => t.txn_type))
+    return rows.length === batch.sel.size && kinds.size === 1 && !kinds.has('transfer') ? rows[0].txn_type : ''
+  }
+  function batchPatchError(t, patch) {
+    if (!t || t.deleted_at) return '账目已删除或不存在'
+    if (patch.category_id != null) {
+      const c = S.category(patch.category_id)
+      if (!c || t.txn_type === 'transfer' || c.kind !== t.txn_type) return '分类与账目的收支类型不一致'
+    }
+    if (patch.account_id != null) {
+      const accounts = S.allAccounts()
+      const from = accounts.find(a => String(a.id) === String(t.account_id))
+      const to = accounts.find(a => String(a.id) === String(patch.account_id))
+      const cur = a => String(a && a.currency || 'CNY').toUpperCase()
+      if (!from) return '原账户不明确，请先逐笔确认币种'
+      if (!to) return '账户已不存在'
+      if (cur(from) !== cur(to)) return '仅支持改到同币种账户，金额不会自动换算'
+      if (t.txn_type === 'transfer') {
+        const receiving = accounts.find(a => String(a.id) === String(t.to_account_id))
+        if (!receiving || String(to.id) === String(receiving.id)) return '转出和转入账户不能相同'
+        if (cur(to) !== cur(receiving)) return '暂不支持跨币种转账'
+      }
+    }
+    return ''
+  }
   function batchBarEl() {
-    let el = document.getElementById('batchBar')
+    let el = $('#batchBar')
     if (!el) {
       el = document.createElement('div')
-      el.id = 'batchBar'
-      el.className = 'batch-bar'
-      el.setAttribute('role', 'toolbar')
-      el.setAttribute('aria-label', '批量操作')
+      el.id = 'batchBar'; el.className = 'batch-bar'
+      el.setAttribute('role', 'toolbar'); el.setAttribute('aria-label', '批量操作')
       document.body.appendChild(el)
+      const measure = () => {
+        if (el.classList.contains('on')) document.body.style.setProperty('--batch-height', (el.getBoundingClientRect().height || 100) + 'px')
+      }
+      if (typeof ResizeObserver === 'function') { batchObserver = new ResizeObserver(measure); batchObserver.observe(el) }
+      else window.addEventListener('resize', measure)
     }
     return el
   }
   function syncBatchBar() {
-    const el = batchBarEl()
-    if (!batch.on) { el.classList.remove('on'); el.innerHTML = ''; return }
+    const el = $('#batchBar') || (batch.on ? batchBarEl() : null)
+    document.body.classList.toggle('batch-active', batch.on)
+    if (!el) return
+    if (!batch.on) { el.classList.remove('on'); el.innerHTML = ''; document.body.style.removeProperty('--batch-height'); return }
+    const focused = el.contains(document.activeElement) ? document.activeElement.id : ''
     el.classList.add('on')
-    const n = batch.sel.size
+    const n = batch.sel.size, busy = batch.busy, disabled = busy ? ' disabled' : ''
     el.innerHTML =
-      '<div class="batch-count" role="status">已选 <b class="num">' + n + '</b> 笔</div>' +
+      '<div class="batch-count" role="status">已选 <b class="num">' + n + '</b> 笔' + (busy ? ' · 正在处理…' : '') + '</div>' +
       '<div class="batch-acts">' +
-      '<button type="button" class="btn sm line" id="batchAll">' + (n && n === (window.App.state.txns || []).length ? '取消全选' : '全选') + '</button>' +
-      '<button type="button" class="btn sm line" id="batchCat"' + (n ? '' : ' disabled') + '>改分类</button>' +
-      '<button type="button" class="btn sm line" id="batchAcc"' + (n ? '' : ' disabled') + '>改账户</button>' +
-      '<button type="button" class="btn sm danger" id="batchDel"' + (n ? '' : ' disabled') + '>删除</button>' +
-      '<button type="button" class="btn sm line" id="batchExit">退出</button>' +
-      '</div>'
+      '<button type="button" class="btn sm line" id="batchAll"' + disabled + '>' + (n && n === (window.App.state.txns || []).length ? '取消全选' : '全选') + '</button>' +
+      '<button type="button" class="btn sm line" id="batchCat"' + (!n || busy || !batchCategoryKind() ? ' disabled' : '') + '>改分类</button>' +
+      '<button type="button" class="btn sm line" id="batchAcc"' + (!n || busy ? ' disabled' : '') + '>改账户</button>' +
+      '<button type="button" class="btn sm danger" id="batchDel"' + (!n || busy ? ' disabled' : '') + '>删除</button>' +
+      '<button type="button" class="btn sm line" id="batchExit"' + disabled + '>退出</button></div>'
     $('#batchAll').addEventListener('click', () => {
+      if (batch.busy) return
       const all = (window.App.state.txns || []).map(t => String(t.id))
       if (batch.sel.size === all.length) batch.sel.clear()
       else all.forEach(id => batch.sel.add(id))
       repaintBatch()
     })
-    $('#batchCat').addEventListener('click', () => batchPickCategory())
-    $('#batchAcc').addEventListener('click', () => batchPickAccount())
-    $('#batchDel').addEventListener('click', () => batchDelete())
-    $('#batchExit').addEventListener('click', () => { batch = { on: false, sel: new Set() }; repaintBatch() })
+    $('#batchCat').addEventListener('click', batchPickCategory)
+    $('#batchAcc').addEventListener('click', batchPickAccount)
+    $('#batchDel').addEventListener('click', batchDelete)
+    $('#batchExit').addEventListener('click', () => { if (!batch.busy) endBatch() })
+    if (focused && $('#' + focused) && !$('#' + focused).disabled) $('#' + focused).focus({ preventScroll: true })
+    requestAnimationFrame(() => {
+      if (batch.on) document.body.style.setProperty('--batch-height', (el.getBoundingClientRect().height || 100) + 'px')
+    })
   }
   function repaintBatch() {
     syncBatchBar()
-    /* 工具栏上的多选按钮跟着高亮/取消高亮 */
     $$('[data-batch]').forEach(b => {
       b.classList.toggle('on', batch.on)
       b.setAttribute('aria-pressed', batch.on ? 'true' : 'false')
+      b.disabled = !!batch.busy
     })
-    /* 只重画行上的选中态，不整页重绘：整页重绘会丢滚动位置 */
     $$('#content .txn').forEach(el => {
-      const id = String(el.getAttribute('data-id'))
-      const picked = batch.sel.has(id)
-      el.classList.toggle('sel', picked)
-      el.classList.toggle('pick', batch.on)
+      const picked = batch.on && batch.sel.has(String(el.getAttribute('data-id')))
+      el.classList.toggle('sel', picked); el.classList.toggle('pick', batch.on)
+      const name = (el.getAttribute('aria-label') || '').replace(/^(编辑|选择|取消选择) /, '')
+      el.setAttribute('aria-label', (batch.on ? picked ? '取消选择 ' : '选择 ' : '编辑 ') + name)
       if (batch.on) el.setAttribute('aria-pressed', picked ? 'true' : 'false')
       else el.removeAttribute('aria-pressed')
       let box = el.querySelector('.pick-box')
-      if (batch.on && !box) {
-        box = document.createElement('span')
-        box.className = 'pick-box'
-        box.setAttribute('aria-hidden', 'true')
-        el.insertBefore(box, el.firstChild)
+      if (!batch.on) { if (box) box.remove(); return }
+      if (!box) {
+        box = document.createElement('span'); box.className = 'pick-box'
+        box.setAttribute('aria-hidden', 'true'); el.insertBefore(box, el.firstChild)
       }
-      if (box) {
-        box.classList.toggle('on', picked)
-        box.innerHTML = picked ? ic('check') : ''
-      }
+      box.classList.toggle('on', picked); box.innerHTML = picked ? ic('check') : ''
     })
   }
   function batchToggleOne(id) {
+    if (batch.busy) return
     const key = String(id)
     if (batch.sel.has(key)) batch.sel.delete(key)
     else batch.sel.add(key)
     repaintBatch()
   }
   function startBatch() {
-    batch = { on: true, sel: new Set() }
-    syncBatchBar()
+    batch = { on: true, sel: new Set(), context: batchContext(window.App.state), busy: false }
     repaintBatch()
     toast('已进入多选：点账目选中，再选操作')
   }
-
   function batchPickCategory() {
-    const roots = S.rootCategories('expense').concat(S.rootCategories('income'))
+    const kind = batchCategoryKind()
+    if (batch.busy || !kind) return
+    const roots = S.rootCategories(kind)
     let html = '<div class="sheet-head"><span class="sheet-title">批量改分类</span><button id="bcClose" class="btn sm line">关闭</button></div>' +
-      '<div class="small muted" style="margin-bottom:8px">将把选中的 ' + batch.sel.size + ' 笔账目改成同一个分类。</div>'
+      '<div class="small muted" style="margin-bottom:8px">只修改同一收支类型的分类，金额保持原样。</div>'
     roots.forEach(p => {
-      html += '<div class="field" style="margin-bottom:8px"><label>' + esc(p.icon || '') + ' ' + esc(p.name) + '</label>' +
-        '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+      html += '<div class="field"><label>' + esc(p.icon || '') + ' ' + esc(p.name) + '</label><div class="chips">' +
         '<button type="button" class="chip" data-bcat="' + p.id + '">用「' + esc(p.name) + '」</button>' +
-        S.childCategories(p.id).map(c => '<button type="button" class="chip" data-bcat="' + c.id + '">' + esc(c.name) + '</button>').join('') +
-        '</div></div>'
+        S.childCategories(p.id).filter(c => c.kind === kind).map(c => '<button type="button" class="chip" data-bcat="' + c.id + '">' + esc(c.name) + '</button>').join('') + '</div></div>'
     })
     openSheet(html)
     $('#bcClose').addEventListener('click', closeSheet)
-    $$('[data-bcat]', $('#sheet')).forEach(b => {
-      b.addEventListener('click', () => {
-        const id = idNum(b.getAttribute('data-bcat'))
-        closeSheet()
-        batchUpdate({ category_id: id }, '改分类')
-      })
-    })
+    $$('[data-bcat]', $('#sheet')).forEach(b => b.addEventListener('click', () => {
+      closeSheet(); batchUpdate({ category_id: idNum(b.getAttribute('data-bcat')) }, '改分类')
+    }))
   }
-
   function batchPickAccount() {
-    const list = S.allAccounts()
-    let html = '<div class="sheet-head"><span class="sheet-title">批量改账户</span><button id="baClose" class="btn sm line">关闭</button></div>' +
-      '<div class="small muted" style="margin-bottom:8px">将把选中的 ' + batch.sel.size + ' 笔账目的账户改成同一个。</div>'
-    if (!list.length) html += '<div class="small muted">还没有账户</div>'
-    html += list.map(a => '<button type="button" class="list-item" data-bacc="' + a.id + '" style="width:100%;border:0;background:none;text-align:left">' +
-      '<div class="ico">' + esc(a.icon || '💰') + '</div>' +
-      '<div class="grow"><div>' + esc(a.name) + '</div><div class="small muted">' + (a.currency || 'CNY') + '</div></div>' +
-      '<span class="muted">›</span></button>').join('')
-    openSheet(html)
+    if (batch.busy || !batch.sel.size) return
+    const rows = batchRows(), list = S.allAccounts()
+    openSheet('<div class="sheet-head"><span class="sheet-title">批量改账户</span><button id="baClose" class="btn sm line">关闭</button></div>' +
+      '<div class="small muted" style="margin-bottom:8px">仅支持同币种账户，金额不换算；转出和转入账户不能相同。</div>' +
+      list.map(a => {
+        const reason = rows.length !== batch.sel.size ? '账目已变化，请重新选择' : rows.map(t => batchPatchError(t, { account_id: a.id })).find(Boolean)
+        return '<button type="button" class="list-item" data-bacc="' + a.id + '"' + (reason ? ' disabled' : '') + ' style="width:100%;border:0;background:none;text-align:left">' +
+          '<div class="ico">' + esc(a.icon || '💰') + '</div><div class="grow"><div>' + esc(a.name) + '</div><div class="small muted">' +
+          esc(reason || a.currency || 'CNY') + '</div></div></button>'
+      }).join(''))
     $('#baClose').addEventListener('click', closeSheet)
-    $$('[data-bacc]', $('#sheet')).forEach(b => {
-      b.addEventListener('click', () => {
-        const id = idNum(b.getAttribute('data-bacc'))
-        closeSheet()
-        batchUpdate({ account_id: id }, '改账户')
-      })
-    })
+    $$('[data-bacc]', $('#sheet')).forEach(b => b.addEventListener('click', () => {
+      closeSheet(); batchUpdate({ account_id: idNum(b.getAttribute('data-bacc')) }, '改账户')
+    }))
   }
-
-  /* 批量写入：逐条走既有方法（自带同步队列与幂等），失败计数后统一汇报，
-     不因为中间一条失败就丢弃整批 —— 用户最怕「点了一次，改了一半还不知道」。 */
-  async function batchUpdate(patch, label) {
-    const ids = Array.from(batch.sel).map(Number)
-    if (!ids.length) return
-    const total = ids.length
-    let ok = 0
+  async function runBatch(patch, label, remove) {
+    syncBatchContext(window.App.state)
+    const job = batch, ids = Array.from(job.sel).map(Number)
+    if (!job.on || job.busy || !ids.length) return
+    const reviewedRows = new Map(batchRows().map(t => [String(t.id), Object.assign({}, t)]))
+    job.busy = true; repaintBatch()
+    let ok = 0, reason = ''
     const failed = []
-    toast('正在' + label + ' 0/' + total)
     for (let i = 0; i < ids.length; i++) {
       try {
-        await S.updateTransaction(ids[i], Object.assign({}, patch))
+        if (job !== batch || job.context !== batchContext(window.App.state) || window.App.state.tab !== 'home') throw new Error('页面或账本已切换，已停止操作')
+        let t
+        try { t = await S.getTransaction(ids[i]) }
+        catch (e) {
+          const writer = remove ? S.deleteTransaction : S.updateTransaction
+          if (S.mode !== 'cloud' || !window.Sync || !window.Sync.isNetworkError(e) || !writer.__syncWrapped) throw e
+          t = reviewedRows.get(String(ids[i]))
+        }
+        if (job !== batch || job.context !== batchContext(window.App.state)) throw new Error('页面或账本已切换，已停止操作')
+        const error = batchPatchError(t, patch)
+        if (error) throw new Error(error)
+        if (remove) { const id = ids[i]; await S.deleteTransaction(id) }
+        else await S.updateTransaction(ids[i], Object.assign({}, patch), t.updated_at)
         ok++
-      } catch (e) { failed.push(ids[i]) }
-      if (i % 10 === 9) toast('正在' + label + ' ' + (i + 1) + '/' + total)
+      } catch (e) { failed.push(ids[i]); reason = reason || e.message || '请重试' }
     }
-    batch = { on: false, sel: new Set() }
-    syncBatchBar()
-    if (failed.length) {
-      toast(label + '完成 ' + ok + ' 笔，' + failed.length + ' 笔失败（多为网络问题，可稍后重试）')
-    } else {
-      toast('已' + label + ' ' + ok + ' 笔')
+    syncBatchContext(window.App.state)
+    if (job === batch) {
+      job.busy = false
+      if (failed.length) { job.sel = new Set(failed.map(String)); repaintBatch() }
+      else endBatch()
     }
+    toast(failed.length ? label + '完成 ' + ok + ' 笔，失败 ' + failed.length + ' 笔：' + reason : '已' + label + ' ' + ok + ' 笔')
     window.App.refresh()
+  }
+  async function batchUpdate(patch, label) { return runBatch(patch, label, false) }
+  async function batchDelete() {
+    if (!batch.on || batch.busy || !batch.sel.size) return
+    const job = batch
+    if (!(await confirmSheet({ title: '批量删除', danger: true, okText: '删除 ' + job.sel.size + ' 笔',
+      body: '选中的账目将移入回收站，可随时恢复。确定继续？' }))) return
+    if (job === batch) return runBatch({}, '删除', true)
   }
 
-  async function batchDelete() {
-    const ids = Array.from(batch.sel).map(Number)
-    if (!ids.length) return
-    if (!(await confirmSheet({
-      title: '批量删除', danger: true, okText: '删除 ' + ids.length + ' 笔',
-      body: '将把选中的 ' + ids.length + ' 笔账目移入回收站，之后可以随时恢复。确定继续？',
-    }))) return
-    let ok = 0
-    const failed = []
-    for (const id of ids) {
-      try { await S.deleteTransaction(id); ok++ } catch (e) { failed.push(id) }
-    }
-    batch = { on: false, sel: new Set() }
-    syncBatchBar()
-    toast(failed.length ? ('已删除 ' + ok + ' 笔，' + failed.length + ' 笔失败') : ('已移入回收站 ' + ok + ' 笔'))
-    window.App.refresh()
-  }
 
   function idNum(v) { return /^\d+$/.test(String(v)) ? Number(v) : v }
 
@@ -1403,7 +1453,8 @@ window.UI = (function () {
   /* 明细页工具入口：相册 / 标签 / 报表中心 */
   function bindHomeTools() {
     $$('[data-batch]').forEach(b => b.addEventListener('click', () => {
-      if (batch.on) { batch = { on: false, sel: new Set() }; repaintBatch() }
+      if (batch.busy) return
+      if (batch.on) endBatch()
       else startBatch()
     }))
     const sfSave = $('#savedFilterSave')
@@ -2617,71 +2668,293 @@ window.UI = (function () {
      必须是白名单：PIN 哈希（ledger10_lock）、分享密钥（ledger10_shares）、
      同步队列（ledger10_sync2:*）绝对不能进备份文件。 */
   const OVERLAY_PREFIX = [
-    'ledger10_reimb',                /* 旧版报销进度（无命名空间） */
-    'ledger10_reimb_v2',             /* 现行报销进度，键名带 :[mode,owner] 命名空间 */
-    'ledger10_reconcile_marks_v1',   /* 对账标记 */
-    'ledger10_recon_log',
-    'ledger10_goallink',             /* 目标 ↔ 账户联动 */
-    'ledger10_goalauto',
-    'ledger10_rollover',             /* 预算结转 */
-    'ledger10_rules',                /* 智能分类规则 */
-    'ledger10_fx',                   /* 自定义汇率 */
-    'ledger10_saved_filters_v1',
-    'ledger10_lastpick',
-    'ledger10_import_accounts_v1',
-    'ledger10_debt_rate',
+    'ledger10_reimb', 'ledger10_reimb_v2', 'ledger10_reconcile_marks_v1', 'ledger10_recon_log',
+    'ledger10_goallink', 'ledger10_goalauto', 'ledger10_rollover', 'ledger10_rules',
+    'ledger10_fx', 'ledger10_base', 'ledger10_saved_filters_v1', 'ledger10_lastpick',
+    'ledger10_import_accounts_v1', 'ledger10_debt_rate', 'ledger10_debt_meta', 'ledger10_card_meta',
   ]
-  const OVERLAY_MAX = 200000          /* 单键上限，防止把超大 JSON 塞进备份 */
+  const OVERLAY_MAX = 200000
+  const OVERLAY_META = '__ledger10_overlay'
+  const OVERLAY_NAMES = {
+    ledger10_reimb: '旧版报销进度', ledger10_reimb_v2: '报销进度', ledger10_reconcile_marks_v1: '对账标记',
+    ledger10_recon_log: '余额校准记录', ledger10_goallink: '目标账户联动', ledger10_goalauto: '目标自动存入',
+    ledger10_rollover: '预算结转', ledger10_rules: '智能分类规则', ledger10_fx: '汇率', ledger10_base: '基准币种',
+    ledger10_saved_filters_v1: '常用筛选', ledger10_lastpick: '上次账户分类', ledger10_import_accounts_v1: '导入账户映射',
+    ledger10_debt_rate: '债务利率', ledger10_debt_meta: '借款附加信息', ledger10_card_meta: '信用卡设置',
+  }
+  function overlayIdentity() {
+    const state = S.state || {}
+    const owner = S.mode === 'cloud' ? state.uid : S.mode === 'guest' ? state.sourceId : ''
+    return owner ? { mode: S.mode, owner: String(owner) } : null
+  }
+  function overlayOwner(v) {
+    return v && ['guest', 'cloud'].includes(v.mode) && typeof v.owner === 'string' && v.owner ? v : null
+  }
+  function overlayScope(text) {
+    try { const v = JSON.parse(text); return Array.isArray(v) && v.length >= 2 ? overlayOwner({ mode: v[0], owner: v[1] }) : null } catch (e) { return null }
+  }
+  function sameOverlayOwner(a, b) { return !!a && !!b && a.mode === b.mode && a.owner === b.owner }
+  function overlayObject(v) { return v && typeof v === 'object' && !Array.isArray(v) }
+  function overlayCount(v) { return v && typeof v === 'object' ? Object.keys(v).length : 1 }
+  function overlayIssue(report, key, count) {
+    if (!count) return
+    const name = OVERLAY_NAMES[key] || '未知本机设置'
+    report.skipped = (report.skipped || 0) + count
+    report.items = report.items || []
+    const old = report.items.find(x => x.name === name)
+    if (old) old.count += count
+    else report.items.push({ name, count })
+  }
+  function overlayMessage(report) {
+    if (!report || !report.skipped) return ''
+    return '；未覆盖 ' + report.skipped + ' 项：' + report.items.map(x => x.name + ' ' + x.count).join('、') + '。归属或关联无法确认，请保留原设备和旧备份'
+  }
   function isOverlayKey(k) {
-    return OVERLAY_PREFIX.some(p => k === p || k.indexOf(p + ':') === 0)
+    return OVERLAY_PREFIX.includes(k) || ['ledger10_reimb_v2', 'ledger10_saved_filters_v1'].some(p => k.indexOf(p + ':') === 0)
   }
   function collectOverlays() {
-    const out = {}
+    const out = {}, source = overlayIdentity(), report = { skipped: 0, items: [] }
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i)
         if (!k || !isOverlayKey(k)) continue
-        const v = localStorage.getItem(k)
-        if (typeof v === 'string' && v.length <= OVERLAY_MAX) out[k] = v
+        const raw = localStorage.getItem(k)
+        if (typeof raw !== 'string' || raw.length > OVERLAY_MAX) { overlayIssue(report, k, 1); continue }
+        if (k === 'ledger10_fx' || k === 'ledger10_base') { out[k] = raw; continue }
+        const scoped = ['ledger10_reimb_v2', 'ledger10_saved_filters_v1'].find(p => k.indexOf(p + ':') === 0)
+        if (scoped) {
+          let owner
+          try { owner = overlayScope(decodeURIComponent(k.slice(scoped.length + 1))) } catch (e) { /* 非法命名空间不认领 */ }
+          if (sameOverlayOwner(owner, source)) out[k] = raw
+          continue
+        }
+        let v
+        try { v = JSON.parse(raw) } catch (e) { overlayIssue(report, k, 1); continue }
+        if (k === 'ledger10_reconcile_marks_v1' || k === 'ledger10_import_accounts_v1') {
+          const selected = Object.create(null)
+          if (source && overlayObject(v)) Object.keys(v).forEach(scope => {
+            if (sameOverlayOwner(overlayScope(scope), source)) selected[scope] = v[scope]
+          })
+          if (Object.keys(selected).length) out[k] = JSON.stringify(selected)
+          continue
+        }
+        /* 旧全局键没有owner，数字ID碰号不能证明归属。只报告数量，不导出可能属于别人的内容。 */
+        overlayIssue(report, k, overlayCount(v))
       }
-    } catch (e) { /* 无存储权限（隐私模式）：跳过，不影响主备份 */ }
+    } catch (e) { overlayIssue(report, '本机存储', 1) }
+    out[OVERLAY_META] = { version: 2, source, omitted: report.items }
     return out
   }
-  function applyOverlays(obj) {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return 0
-    let n = 0
+  function applyOverlays(obj, context) {
+    if (!overlayObject(obj)) return 0
+    const ctx = context || {}, report = ctx.report || {}, target = overlayOwner(ctx.target) || overlayIdentity()
+    report.skipped = 0; report.items = []; report.applied = 0
+    const meta = overlayObject(obj[OVERLAY_META]) && obj[OVERLAY_META].version === 2 ? obj[OVERLAY_META] : {}
+    const source = overlayOwner(ctx.source) || overlayOwner(meta.source)
+    const data = ctx.data || {}, maps = ctx.maps
+    const sameIds = !maps && source && target && (sameOverlayOwner(source, target) ||
+      (ctx.replace && target.mode === 'guest' && data.sourceId === target.owner))
+    const mapId = (kind, id) => {
+      if (id == null || id === '') return id
+      const table = { txnMap: 'transactions', accMap: 'accounts', catMap: 'categories', goalMap: 'goals', bookMap: 'books' }[kind]
+      if (Array.isArray(data[table]) && !data[table].some(x => String(x.id) === String(id))) return undefined
+      if (maps) return maps[kind] && Object.prototype.hasOwnProperty.call(maps[kind], String(id)) ? maps[kind][id] : undefined
+      if (!sameIds) return undefined
+      return /^\d+$/.test(String(id)) ? Number(id) : id
+    }
+    const parse = raw => { try { return JSON.parse(raw) } catch (e) { return undefined } }
+    const merge = (incoming, existing) => {
+      if (overlayObject(incoming) && overlayObject(existing)) {
+        const out = Object.assign(Object.create(null), incoming)
+        Object.keys(existing).forEach(k => { out[k] = Object.prototype.hasOwnProperty.call(out, k) ? merge(out[k], existing[k]) : existing[k] })
+        return out
+      }
+      if (Array.isArray(incoming) && Array.isArray(existing)) {
+        const out = existing.slice()
+        incoming.forEach(x => {
+          if (!out.some(y => x && y && (x.id != null ? x.id === y.id : x.name != null ? x.name === y.name : JSON.stringify(x) === JSON.stringify(y)))) out.push(x)
+        })
+        return out
+      }
+      return existing === undefined ? incoming : existing
+    }
+    const signature = t => JSON.stringify([t.txn_type, t.amount, t.occurred_at, t.account_id, t.to_account_id, t.category_id, t.note, t.updated_at])
+    const sameImportedRow = (row, targetRow) => {
+      if (!row || !targetRow || row.txn_type !== targetRow.txn_type || Number(row.amount) !== Number(targetRow.amount) ||
+        new Date(row.occurred_at).getTime() !== new Date(targetRow.occurred_at).getTime() || String(row.note || '') !== String(targetRow.note || '')) return false
+      return [['account_id', 'accMap'], ['to_account_id', 'accMap'], ['category_id', 'catMap']].every(([field, kind]) => {
+        const id = mapId(kind, row[field])
+        return (row[field] == null || id != null) && String(id == null ? '' : id) === String(targetRow[field] == null ? '' : targetRow[field])
+      })
+    }
     Object.keys(obj).forEach(k => {
       if (!isOverlayKey(k)) return
-      const v = obj[k]
-      if (typeof v !== 'string' || v.length > OVERLAY_MAX) return
-      try { localStorage.setItem(k, v); n++ } catch (e) { /* 忽略单键失败 */ }
+      const prefix = OVERLAY_PREFIX.find(p => k === p || k.indexOf(p + ':') === 0)
+      const raw = obj[k], issue = n => overlayIssue(report, prefix, n)
+      if (typeof raw !== 'string' || raw.length > OVERLAY_MAX) { issue(1); return }
+      let v = parse(raw), dest = k, out
+      if (prefix === 'ledger10_fx' || prefix === 'ledger10_base') {
+        if (v === undefined) v = raw
+        out = v
+      } else {
+        if (!source || !target || v === undefined) { issue(overlayCount(v)); return }
+        const scoped = prefix === 'ledger10_reimb_v2' || prefix === 'ledger10_saved_filters_v1'
+        if (scoped) {
+          let owner
+          try { owner = overlayScope(decodeURIComponent(k.slice(prefix.length + 1))) } catch (e) { /* 跳过 */ }
+          if (!sameOverlayOwner(owner, source)) { issue(overlayCount(v)); return }
+          dest = prefix + ':' + encodeURIComponent(JSON.stringify([target.mode, target.owner]))
+        }
+        const byId = (value, kind, convert) => {
+          const result = Object.create(null)
+          if (!overlayObject(value)) { issue(1); return result }
+          Object.keys(value).forEach(id => {
+            const to = mapId(kind, id), item = convert ? convert(value[id]) : value[id]
+            if (to == null || item === undefined) issue(1)
+            else result[to] = item
+          })
+          return result
+        }
+        const fields = (value, spec) => {
+          if (!overlayObject(value)) return undefined
+          const item = Object.assign({}, value)
+          for (const field of Object.keys(spec)) if (item[field] != null && item[field] !== '') {
+            const to = mapId(spec[field], item[field])
+            if (to == null) return undefined
+            item[field] = to
+          }
+          return item
+        }
+        switch (prefix) {
+          case 'ledger10_reimb': issue(overlayCount(v)); return /* 旧无owner数据永不认领 */
+          case 'ledger10_reimb_v2': out = byId(v, 'txnMap', x => overlayObject(x) ? x : undefined); break
+          case 'ledger10_goallink': out = byId(v, 'goalMap', x => x && x.accountId != null ? fields(x, { accountId: 'accMap' }) : undefined); break
+          case 'ledger10_goalauto': out = byId(v, 'goalMap', x => overlayObject(x) ? x : undefined); break
+          case 'ledger10_debt_meta': case 'ledger10_debt_rate': case 'ledger10_card_meta': out = byId(v, 'accMap', x => overlayObject(x) ? x : undefined); break
+          case 'ledger10_rollover': out = byId(v, 'catMap'); break
+          case 'ledger10_lastpick':
+            out = Object.create(null)
+            for (const [part, kind] of [['acc', 'accMap'], ['cat', 'catMap']]) {
+              const result = Object.create(null)
+              if (v && overlayObject(v[part])) Object.keys(v[part]).forEach(type => {
+                const id = mapId(kind, v[part][type]); if (id != null) result[type] = id; else issue(1)
+              })
+              if (Object.keys(result).length) out[part] = result
+            }
+            break
+          case 'ledger10_recon_log':
+            out = Array.isArray(v) ? v.map(x => { const row = fields(x, { accountId: 'accMap' }); if (!row) issue(1); return row }).filter(Boolean) : []
+            break
+          case 'ledger10_rules':
+            out = Array.isArray(v) ? v.map(x => { const row = fields(x, { setAccountId: 'accMap', setCategoryId: 'catMap' }); if (!row) issue(1); return row }).filter(Boolean) : []
+            break
+          case 'ledger10_saved_filters_v1':
+            out = Array.isArray(v) ? v.map(x => {
+              const f = x && fields(x.filters, { accountId: 'accMap', categoryId: 'catMap' })
+              if (!f || typeof x.name !== 'string') { issue(1); return null }
+              return Object.assign({}, x, { filters: f })
+            }).filter(Boolean) : []
+            break
+          case 'ledger10_import_accounts_v1': {
+            out = Object.create(null)
+            if (!overlayObject(v)) { issue(1); return }
+            Object.keys(v).forEach(scope => {
+              if (!sameOverlayOwner(overlayScope(scope), source)) { issue(overlayCount(v[scope])); return }
+              const entries = Object.create(null)
+              if (overlayObject(v[scope])) Object.keys(v[scope]).forEach(name => {
+                const id = mapId('accMap', v[scope][name]); if (id != null) entries[name] = id; else issue(1)
+              })
+              if (Object.keys(entries).length) out[JSON.stringify([target.mode, target.owner])] = entries
+            })
+            break
+          }
+          case 'ledger10_reconcile_marks_v1': {
+            out = Object.create(null)
+            if (!overlayObject(v)) { issue(1); return }
+            Object.keys(v).forEach(scope => {
+              if (!sameOverlayOwner(overlayScope(scope), source)) { issue(overlayCount(v[scope])); return }
+              let parts
+              try { parts = JSON.parse(scope) } catch (e) { return }
+              const account = mapId('accMap', parts[2]), entries = Object.create(null)
+              if (account == null || parts.length !== 3 || !overlayObject(v[scope])) { issue(overlayCount(v[scope])); return }
+              Object.keys(v[scope]).forEach(id => {
+                const to = mapId('txnMap', id), row = (data.transactions || []).find(t => String(t.id) === id)
+                const targetRow = maps ? maps.txnRows && maps.txnRows[id] : row
+                if (to == null || !row || !targetRow || signature(row) !== v[scope][id] || String(targetRow.id) !== String(to) || !sameImportedRow(row, targetRow)) { issue(1); return }
+                entries[to] = signature(targetRow)
+              })
+              if (Object.keys(entries).length) out[JSON.stringify([target.mode, target.owner, String(account)])] = entries
+            })
+            break
+          }
+          default: issue(overlayCount(v)); return
+        }
+      }
+      if (out && typeof out === 'object' && !Object.keys(out).length) return
+      try {
+        const previous = localStorage.getItem(dest)
+        const existing = previous == null ? undefined : parse(previous)
+        if (previous != null && existing === undefined && prefix !== 'ledger10_base') { issue(overlayCount(out)); return }
+        const result = ctx.replace && sameIds && prefix !== 'ledger10_reconcile_marks_v1' && prefix !== 'ledger10_import_accounts_v1' ? out : merge(out, existing)
+        const text = prefix === 'ledger10_base' && typeof result === 'string' ? result : JSON.stringify(result)
+        if (text.length > OVERLAY_MAX) { issue(overlayCount(out)); return }
+        localStorage.setItem(dest, text); report.applied++
+      } catch (e) { issue(overlayCount(out)) }
     })
-    return n
+    if (Array.isArray(meta.omitted)) meta.omitted.forEach(x => {
+      if (!x || typeof x.name !== 'string' || !Number.isFinite(x.count) || x.count <= 0) return
+      report.skipped += x.count; report.items.push({ name: x.name, count: x.count })
+    })
+    report.message = overlayMessage(report)
+    return report.applied
   }
 
   /* ---------- JSON 备份 / 恢复 ---------- */
+  function backupImportWarning(result) {
+    const failed = ['txnFail', 'imgFail', 'ruleFail', 'tplFail'].flatMap(key => result && result[key] || [])
+    if (!failed.length) return ''
+    const reasons = Array.from(new Set(failed.map(x => x.msg || '写入失败'))).slice(0, 3).join('；')
+    return '；有 ' + failed.length + ' 项未恢复：' + reasons + '。已保留当前数据，请核对冲突或网络后重试'
+  }
   function openBackupSheet() {
     const isGuest = window.DB.mode === 'guest'
+    const backupOwner = overlayIdentity()
+    const backupActive = () => sameOverlayOwner(backupOwner, overlayIdentity())
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">JSON 备份 / 恢复</span><button id="bakClose" class="btn sm line">关闭</button></div>' +
       '<div class="small muted" style="margin-bottom:12px">' +
-      (isGuest ? '备份包含账目、图片、账本、预算、目标，以及报销进度、对账标记、预算结转等本机设置。'
+      (isGuest ? '备份包含账目、图片、账本、预算、目标，以及当前身份的报销进度、对账标记等本机设置。'
                : '备份包含账目、账户、分类、账本、预算、周期规则、目标，以及报销进度、对账标记等本机设置。') +
-      '<b>不含凭证图片文件</b>（' + (isGuest ? '游客模式的图片已内联在文件里' : '云端图片请用「加密备份到云端」另存') + '）、模板、回收站账目。' +
+      '旧版目标联动、预算结转、分类规则等无身份信息的本机设置不会自动认领，导出后会列出未覆盖项目；请保留原设备和旧副本。' +
+      (isGuest ? '游客图片已内联在文件中，模板和回收站账目一并备份。' : '<b>不含凭证图片文件</b>、模板和回收站账目；云端凭证原图请另外保存。') +
       '</div>' +
       '<button class="btn block" id="bakExport">导出账目备份</button>' +
       '<div class="divider">恢复</div>' +
       '<input type="file" id="bakFile" accept=".json,application/json" class="hidden">' +
       '<button class="btn line block" id="bakImport">选择备份文件并恢复</button>' +
-      '<div class="err" id="bakErr"></div>' +
+      '<div class="err" id="bakErr" role="alert"></div>' +
       '<div class="hint">' + (isGuest ? '恢复会覆盖本机现有游客数据' : '恢复会把备份内容合并进云端账号') + '，建议先导出一份当前数据</div>'
     )
+    const backupError = $('#bakErr')
+    const setBackupMessage = message => {
+      if (backupError.isConnected && $('#sheet').getAttribute('aria-hidden') !== 'true') backupError.textContent = message
+      else toast(message)
+    }
+    let backupBusy = false
+    const setBackupBusy = busy => {
+      backupBusy = busy
+      ;['#bakExport', '#bakImport'].forEach(selector => { const b = $(selector); if (b) b.disabled = busy })
+    }
     $('#bakClose').addEventListener('click', closeSheet)
     $('#bakExport').addEventListener('click', async () => {
+      if (backupBusy) return
+      setBackupBusy(true)
+      setBackupMessage('正在准备备份…')
       try {
         let payload
         if (isGuest) {
           payload = await window.GuestStore.backup()
+          if (!backupActive()) throw new Error('账号或本机账本已切换，请重新打开备份')
           payload.overlays = collectOverlays()
         } else {
           const txns = await S.listTransactions({ limit: 100000, ignoreBook: true })
@@ -2689,6 +2962,7 @@ window.UI = (function () {
             throw new Error('账目读取不完整或数量过多，未生成备份')
           }
           const dump = {
+            sourceId: 'cloud:' + backupOwner.owner,
             accounts: S.allAccounts(),
             categories: S.state.categories,
             transactions: txns.rows,
@@ -2698,6 +2972,7 @@ window.UI = (function () {
             books: S.books(),
             goals: S.state.goals,
           }
+          if (!backupActive()) throw new Error('账号或本机账本已切换，请重新打开备份')
           payload = { app: 'ledger10', version: 2, exportedAt: F.iso(new Date()), data: dump, overlays: collectOverlays() }
         }
         const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' })
@@ -2707,34 +2982,53 @@ window.UI = (function () {
         a.click()
         setTimeout(() => URL.revokeObjectURL(a.href), 3000)
         try { localStorage.setItem('ledger10_bk1', F.iso(new Date())) } catch (e) { /* 忽略 */ }
-        toast('已发起备份下载，请确认文件已保存')
-      } catch (e) { $('#bakErr').textContent = '导出失败：' + (e.message || '') }
+        const omitted = payload.overlays.__ledger10_overlay.omitted
+        const warning = overlayMessage({ skipped: omitted.reduce((n, x) => n + x.count, 0), items: omitted })
+        setBackupMessage(warning)
+        toast('已发起备份下载，请确认文件已保存' + warning)
+      } catch (e) { setBackupMessage('导出失败：' + (e.message || '')) }
+      finally { setBackupBusy(false) }
     })
     $('#bakImport').addEventListener('click', () => $('#bakFile').click())
     $('#bakFile').addEventListener('change', async (e) => {
       const file = e.target.files && e.target.files[0]
-      if (!file) return
+      if (!file || backupBusy) return
+      setBackupBusy(true)
+      setBackupMessage('正在检查并恢复备份…')
       try {
         const text = await file.text()
         const payload = JSON.parse(text)
+        const overlayReport = {}
+        let importWarning = ''
+        if (!backupActive()) throw new Error('账号或本机账本已切换，请重新打开备份')
         if (isGuest) {
           if (!(await confirmSheet({ title: '恢复备份', danger: true, okText: '覆盖恢复', body: '恢复会覆盖本机现有游客数据，确定继续？' }))) return
-          const r = await window.GuestStore.restore(payload)
+          if (!backupActive()) throw new Error('账号或本机账本已切换，请重新打开备份')
+          const r = await window.GuestStore.restore(payload, { isActive: backupActive })
+          if (S.mode !== 'guest') throw new Error('恢复期间账号已切换，本机设置未恢复，请回游客模式核对')
           /* 覆盖层要在 init 之前写回：init 之后首页可能立刻渲染报销角标 */
-          const nOv = applyOverlays(payload && payload.overlays)
+          const nOv = applyOverlays(payload && payload.overlays, { replace: true, data: payload.data || payload,
+            target: { mode: 'guest', owner: window.GuestStore.state.sourceId }, report: overlayReport })
           await S.useGuest()
           toast('已恢复 ' + r.txns + ' 笔账目' + (nOv ? '，含 ' + nOv + ' 项本机设置' : ''))
         } else {
           if (!(await confirmSheet({ title: '恢复备份', okText: '合并导入', body: '会把备份内容合并进当前云端账号（重复的账户/分类自动跳过），确定继续？' }))) return
+          if (!backupActive()) throw new Error('账号或本机账本已切换，请重新打开备份')
           const data = payload && payload.data ? payload.data : payload
           const r = await window.DB.importDumpToCloud(data, m => toast(m))
-          const nOv = applyOverlays(payload && payload.overlays)
+          importWarning = backupImportWarning(r)
+          if (!backupActive()) throw new Error('账号已切换，本机设置未恢复，请回原账号重试')
+          const nOv = applyOverlays(payload && payload.overlays, { maps: r, data, report: overlayReport })
           toast('已导入 ' + r.txns + ' 笔账目' + (nOv ? '，含 ' + nOv + ' 项本机设置' : ''))
         }
-        closeSheet()
+        if (importWarning || overlayReport.message) setBackupMessage(importWarning + (overlayReport.message || ''))
+        else closeSheet()
         window.App.refresh()
       } catch (err) {
-        $('#bakErr').textContent = '恢复失败：' + (err.message || '文件格式不正确')
+        setBackupMessage('恢复失败：' + (err.message || '文件格式不正确'))
+      } finally {
+        setBackupBusy(false)
+        e.target.value = ''
       }
     })
   }
@@ -3998,7 +4292,7 @@ window.UI = (function () {
   return {
     $, $$, toast, openSheet, closeSheet, lightbox, ic, animateFeedback, confirmSheet,
     savedFilterList, savedFilterSave, savedFilterApply, savedFilterDelete, pendingBanner, reimbStatusOf, writeReimb, reimbPending, legacyReimbNotice,
-    renderOverview, renderHome, renderStats, renderAssets, renderMe, ledgerEmpty,
+    renderOverview, renderHome, renderStats, renderAssets, renderMe, ledgerEmpty, syncBatchContext,
     openEditor, loadMore, periodRange, periodTitle, openPeriodPicker,
     openBookSheet, openCategoryBudget, openSubscriptionSheet, openReminderSettings,
     openThemeSettings, openBackupSheet, openGoalEditor, evalAmount, openUiSettings, applyGoalAuto,
@@ -4008,7 +4302,7 @@ window.UI = (function () {
     openHelp, openInstallGuide, openAbout, openDemoData,
     openPrivacy, openTerms, needConsent, markConsent,
     openSyncHub, replayOnboard, exportCsv,
-    collectOverlays, applyOverlays,
+    collectOverlays, applyOverlays, backupImportWarning,
   }
 })()
 

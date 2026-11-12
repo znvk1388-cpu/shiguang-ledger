@@ -62,7 +62,7 @@ test('confirm sheet resolves false on cancel, true on confirm, and falls back wi
   try {
     let p = w.UI.confirmSheet({ title: '删除', body: '确定删除？' })
     await nextTurn()
-    assert.equal(w.document.querySelector('#sheet').getAttribute('aria-hidden'), 'false')
+    assert.equal(w.document.querySelector('#confirmDialog').getAttribute('aria-modal'), 'true')
     w.document.querySelector('#cfNo').click()
     assert.equal(await p, false)
 
@@ -150,8 +150,9 @@ test('stores refuse to silently truncate full reads above the row cap', () => {
 test('local overlays are included in JSON backup but secrets are never exported', async () => {
   const { dom, w } = loadUi()
   try {
-    w.localStorage.setItem('ledger10_reimb_v2:' + encodeURIComponent('["guest","x"]'), JSON.stringify({ 1: { status: 'pending' } }))
-    w.localStorage.setItem('ledger10_goallink', JSON.stringify({ 1: 2 }))
+    w.localStorage.setItem('ledger10_reimb_v2:' + encodeURIComponent('["guest","test-source"]'), JSON.stringify({ 1: { status: 'pending' } }))
+    w.localStorage.setItem('ledger10_goallink', JSON.stringify({ 1: { accountId: 2 } }))
+    w.localStorage.setItem('ledger10_fx', JSON.stringify({ USD: 7 }))
     w.localStorage.setItem('ledger10_lock', JSON.stringify({ pin: 'hash' }))
     w.localStorage.setItem('ledger10_shares', JSON.stringify([{ sid: 'secret' }]))
     w.localStorage.setItem('ledger10_sync2:out:guest', JSON.stringify([{ op: 1 }]))
@@ -159,7 +160,8 @@ test('local overlays are included in JSON backup but secrets are never exported'
 
     const box = w.UI.collectOverlays()
     assert.ok(Object.keys(box).some(k => k.indexOf('ledger10_reimb_v2:') === 0), '报销进度应随备份')
-    assert.ok(Object.prototype.hasOwnProperty.call(box, 'ledger10_goallink'), '目标联动应随备份')
+    assert.equal(Object.prototype.hasOwnProperty.call(box, 'ledger10_goallink'), false, '旧全局目标联动归属不明，不自动导出')
+    assert.ok(box.__ledger10_overlay.omitted.some(x => x.name === '目标账户联动'))
     for (const secret of ['ledger10_lock', 'ledger10_shares', 'ledger10_sync2:out:guest', 'ledger10_theme']) {
       assert.equal(Object.prototype.hasOwnProperty.call(box, secret), false, '不得导出：' + secret)
     }
@@ -170,7 +172,8 @@ test('local overlays are included in JSON backup but secrets are never exported'
     assert.ok(n >= 2)
     assert.equal(w.localStorage.getItem('ledger10_lock'), null, '恢复时不得写入 PIN')
     assert.equal(w.localStorage.getItem('unknown'), null)
-    assert.ok(w.localStorage.getItem('ledger10_goallink'))
+    assert.ok(w.localStorage.getItem('ledger10_fx'))
+    assert.equal(w.localStorage.getItem('ledger10_goallink'), null)
   } finally { dom.window.close() }
 })
 

@@ -140,6 +140,61 @@ window.Vault = (function () {
     return { on: !!m.on, hint: m.hint || '', at: m.at || '', path: m.path || '', bytes: m.bytes || 0, count: m.count || 0 }
   }
 
+  /* 加密文件与普通JSON使用同一套原始实体ID及覆盖层映射。旧快照仍由Share合并。 */
+  function backupIdentity() {
+    const db = S(), state = db && db.state || {}
+    return db ? JSON.stringify([db.mode, db.mode === 'guest' ? state.sourceId || (window.GuestStore && window.GuestStore.state.sourceId) : state.uid]) : ''
+  }
+  function addBackupOverlays(full) {
+    if (U() && U().collectOverlays) full.overlays = U().collectOverlays(full.data)
+    return full
+  }
+  function exportOverlayWarning(full) {
+    const omitted = full && full.overlays && full.overlays.__ledger10_overlay && full.overlays.__ledger10_overlay.omitted || []
+    if (!omitted.length) return ''
+    return '；未覆盖 ' + omitted.reduce((n, x) => n + x.count, 0) + ' 项：' + omitted.map(x => x.name + ' ' + x.count).join('、') + '。归属无法确认，请保留原设备和旧备份'
+  }
+  async function cloudFullBackup() {
+    const db = S()
+    if (!db || typeof db.listTransactions !== 'function') return null
+    const rows = await db.listTransactions({ limit: 100000, ignoreBook: true })
+    if (!rows || !Array.isArray(rows.rows) || (Number.isFinite(rows.total) && rows.total > rows.rows.length)) throw new Error('账目读取不完整，未生成备份')
+    const data = {
+      sourceId: 'cloud:' + db.state.uid, accounts: db.allAccounts(), categories: db.state.categories,
+      transactions: rows.rows, attachments: [], budgets: db.state.budgets || [],
+      recurring: await db.listRecurring({ ignoreBook: true }), books: db.books(), goals: db.state.goals || [],
+      templates: db.listTemplates ? await db.listTemplates() : [],
+    }
+    return { app: 'ledger10', version: 2, exportedAt: new Date().toISOString(), data }
+  }
+  async function restoreFullBackup(full, at) {
+    const db = S(), mode = db && db.mode, identity = backupIdentity()
+    if (!db || !['guest', 'cloud'].includes(mode)) return { error: '请先选择恢复到游客账本或登录账号' }
+    const report = {}
+    const apply = context => U() && U().applyOverlays ? U().applyOverlays(full.overlays, Object.assign(context, { data: full.data, report })) : 0
+    try {
+      if (mode === 'guest') {
+        if (!window.GuestStore) return { error: '本机账本尚未就绪' }
+        if (!(await confirmSheet({ title: '恢复完整备份', danger: true, okText: '替换恢复',
+          body: '将替换当前游客账本、图片和规则。请先备份当前数据；无法确认归属的本机设置将跳过并列明。确定继续？' }))) return { error: '已取消恢复，当前数据未改动' }
+        if (backupIdentity() !== identity) return { error: '恢复期间账号或账本已切换，当前数据未改动' }
+        const result = await window.GuestStore.restore(full, { isActive: () => backupIdentity() === identity })
+        if (S().mode !== 'guest') return { error: '恢复期间账号已切换，本机设置未恢复，请回游客模式核对' }
+        apply({ replace: true, target: { mode: 'guest', owner: window.GuestStore.state.sourceId } })
+        if (db.mode === 'guest' && db.useGuest) await db.useGuest()
+        return { ok: true, stats: { transactions: result.txns, accounts: full.data.accounts.length, failed: 0, skipped: 0 }, at, overlayWarning: report.message || '' }
+      }
+      if (!(await confirmSheet({ title: '合并恢复备份', okText: '合并导入',
+        body: '将合并进当前云端账号，并按新ID恢复可确认归属的本机设置；保留目标已有设置。确定继续？' }))) return { error: '已取消恢复，当前数据未改动' }
+      if (backupIdentity() !== identity) return { error: '恢复期间账号已切换，请重新打开备份' }
+      const result = await db.importDumpToCloud(full.data, m => U().toast(m))
+      if (backupIdentity() !== identity) return { error: '账号已切换，本机设置未恢复，请回原账号重试' }
+      apply({ maps: result })
+      const failed = ['txnFail', 'imgFail', 'ruleFail', 'tplFail'].reduce((n, key) => n + (result[key] || []).length, 0)
+      return { ok: true, stats: { transactions: result.txns, accounts: full.data.accounts.length, failed, skipped: 0 }, at, overlayWarning: (report.message || '') + (U() && U().backupImportWarning ? U().backupImportWarning(result) : '') }
+    } catch (e) { return { error: '恢复失败：' + ((e && e.message) || '') } }
+  }
+
   /* ---------------- 备份 / 恢复 ---------------- */
   async function backup(pass, opts) {
     const o = opts || {}
@@ -152,18 +207,23 @@ window.Vault = (function () {
     if (!sess || !sess.user || !sess.user.id) return { error: '需要先登录才能把备份放到云端（游客数据只在本机）' }
     const st = storage()
     if (!st) return { error: '云存储不可用，请检查网络' }
+    if (S() && (S().mode !== 'cloud' || !S().state || S().state.uid !== sess.user.id)) return { error: '备份账号已切换，请重新打开备份' }
 
-    const Share = await window.Lazy.need('share')
-    if (!Share || !Share.buildSnapshot) return { error: '数据导出模块未就绪，请稍后重试' }
-
+    const identity = backupIdentity()
     U().toast('正在打包账目…')
-    let snap
-    try { snap = await Share.buildSnapshot('端到端加密备份', 'all') } catch (e) { return { error: '打包失败：' + ((e && e.message) || '') } }
-    if (!snap.transactions.length && !snap.accounts.length) return { error: '还没有可备份的数据，先记几笔' }
+    let snap, full, data
+    try {
+      full = await cloudFullBackup()
+      if (backupIdentity() !== identity) return { error: '打包期间账号已切换，请重试' }
+      if (full) { addBackupOverlays(full); snap = { kind: 'ledger-full-v2', backup: full }; data = full.data }
+      else { const Share = await window.Lazy.need('share'); snap = await Share.buildSnapshot('端到端加密备份', 'all'); data = snap }
+    } catch (e) { return { error: '打包失败：' + ((e && e.message) || '') } }
+    if (!data.transactions.length && !data.accounts.length) return { error: '还没有可备份的数据，先记几笔' }
 
     let payload
     try { payload = await encryptSnapshot(snap, pass, o.hint || '') } catch (e) { return { error: '加密失败：' + ((e && e.message) || '') } }
-    if (payload.length > 12 * 1024 * 1024) return { error: '数据太多（' + snap.transactions.length + ' 笔），单份备份上限约 12MB' }
+    if (backupIdentity() !== identity) return { error: '加密期间账号已切换，请重试' }
+    if (payload.length > 12 * 1024 * 1024) return { error: '数据太多（' + data.transactions.length + ' 笔），单份备份上限约 12MB' }
 
     const name = tsName() + '.json'
     const path = filePath(sess.user.id, name)
@@ -180,10 +240,10 @@ window.Vault = (function () {
     m.path = path
     m.name = name
     m.bytes = payload.length
-    m.count = snap.transactions.length
+    m.count = data.transactions.length
     saveMeta(m)
 
-    return { ok: true, name: name, path: path, bytes: payload.length, count: snap.transactions.length }
+    return { ok: true, name: name, path: path, bytes: payload.length, count: data.transactions.length, overlayWarning: exportOverlayWarning(full) }
   }
 
   async function listBackups() {
@@ -222,8 +282,8 @@ window.Vault = (function () {
   }
 
   /* ---------------- 导出到本机 / 从本机恢复 ----------------
-     文件在本机加密；游客使用完整账本备份，登录状态读取云端并导出有限快照。
-     完整游客备份只在游客模式确认替换后恢复；旧快照保留原有合并行为。 */
+     文件在本机加密；游客及云端新文件均保留原始实体ID。
+     游客恢复须确认替换，云端恢复按迁移映射合并；旧共享快照保留原有合并行为。 */
 
   /* 触发浏览器下载；返回是否成功发起 */
   function downloadBlob(text, filename) {
@@ -266,14 +326,19 @@ window.Vault = (function () {
         const full = await window.GuestStore.backup()
         snap = { kind: 'guest-full-v1', backup: full }
       } else {
-        const Share = await window.Lazy.need('share')
-        if (!Share || !Share.buildSnapshot) return { error: '数据导出模块未就绪，请稍后重试' }
-        snap = await Share.buildSnapshot('本机加密备份', o.scope || 'all')
+        const full = await cloudFullBackup()
+        if (full) snap = { kind: 'ledger-full-v2', backup: full }
+        else {
+          const Share = await window.Lazy.need('share')
+          if (!Share || !Share.buildSnapshot) return { error: '数据导出模块未就绪，请稍后重试' }
+          snap = await Share.buildSnapshot('本机加密备份', o.scope || 'all')
+        }
       }
     }
     catch (e) { return { error: '打包失败：' + ((e && e.message) || '') } }
     if (!sameTarget()) return { error: '打包期间账号或本机账本已切换，未生成备份，请重试' }
-    const data = snap.kind === 'guest-full-v1' ? snap.backup.data : snap
+    if (snap.backup) addBackupOverlays(snap.backup)
+    const data = snap.backup ? snap.backup.data : snap
     if (!data.transactions.length && !data.accounts.length) return { error: '还没有可备份的数据，先记几笔' }
 
     let payload
@@ -293,7 +358,7 @@ window.Vault = (function () {
     m.localHint = o.hint != null ? String(o.hint).slice(0, 30) : (m.localHint || '')
     saveMeta(m)
 
-    return { ok: true, name: name, bytes: payload.length, count: data.transactions.length }
+    return { ok: true, name: name, bytes: payload.length, count: data.transactions.length, overlayWarning: exportOverlayWarning(snap.backup) }
   }
 
   /**
@@ -316,19 +381,7 @@ window.Vault = (function () {
     try { got = await decryptSnapshot(text, pass) }
     catch (e) { return { error: '口令不对，或这份备份已损坏' } }
 
-    if (got.snap && got.snap.kind === 'guest-full-v1') {
-      if (!window.DB || window.DB.mode !== 'guest' || !window.GuestStore) return { error: '这份完整游客备份需要在游客模式恢复，请先切换游客模式' }
-      const sourceId = window.GuestStore.state.sourceId
-      if (!(await confirmSheet({ title: '恢复完整游客备份', danger: true, okText: '替换恢复',
-        body: '此完整游客备份会替换当前设备上的游客账本、图片和规则，不能合并。请先备份当前数据。确定继续？' }))) return { error: '已取消恢复，当前数据未改动' }
-      try {
-        const result = await window.GuestStore.restore(got.snap.backup, {
-          isActive: () => window.DB.mode === 'guest' && window.GuestStore.state.sourceId === sourceId,
-        })
-        if (window.DB.mode === 'guest' && window.DB.useGuest) await window.DB.useGuest()
-        return { ok: true, stats: { transactions: result.txns, accounts: got.snap.backup.data.accounts.length, failed: 0 }, at: got.at }
-      } catch (e) { return { error: '恢复失败：' + ((e && e.message) || '') } }
-    }
+    if (got.snap && ['guest-full-v1', 'ledger-full-v2'].includes(got.snap.kind)) return restoreFullBackup(got.snap.backup, got.at)
 
     const Share = await window.Lazy.need('share')
     if (!Share || !Share.mergeSnapshot) return { error: '合并模块未就绪，请稍后重试' }
@@ -370,6 +423,7 @@ window.Vault = (function () {
   async function restore(name, pass) {
     const got = await open(name, pass)
     if (got.error) return got
+    if (got.snap && ['guest-full-v1', 'ledger-full-v2'].includes(got.snap.kind)) return restoreFullBackup(got.snap.backup, got.at)
     const Share = await window.Lazy.need('share')
     if (!Share || !Share.mergeSnapshot) return { error: '合并模块未就绪，请稍后重试' }
     U().toast('正在合并回本机…')
@@ -534,7 +588,7 @@ window.Vault = (function () {
       go.disabled = true
       const r = await backup(pass, { hint: hintEl ? hintEl.value : undefined })
       if (r.error) { renderCenter(r.error, 'err'); return }
-      renderCenter('备份完成：' + r.count + ' 笔 · ' + kb(r.bytes), 'ok')
+      renderCenter('备份完成：' + r.count + ' 笔 · ' + kb(r.bytes) + (r.overlayWarning || ''), 'ok')
     })
     const off = $('#vtOff')
     if (off) off.addEventListener('click', () => {
@@ -568,10 +622,10 @@ window.Vault = (function () {
           if (rr.error) { renderCenter(rr.error, 'err'); return }
           const s = rr.stats || {}
           /* 恢复走的是同一条合并链路：失败项不会被算成「已存在」，要如实告诉用户 */
-          renderCenter(s.failed
+          renderCenter((s.failed
             ? '已恢复 ' + s.transactions + ' 笔账目、' + s.accounts + ' 个账户；有 ' + s.failed +
-              ' 笔写入失败（未被当成重复，重新恢复一次即可补回），重复跳过 ' + s.skipped + ' 笔'
-            : '已恢复：' + s.transactions + ' 笔账目、' + s.accounts + ' 个账户（重复的已自动跳过 ' + s.skipped + ' 笔）',
+              ' 项未恢复（已保留当前数据，请核对冲突或网络后重试），重复跳过 ' + s.skipped + ' 笔'
+            : '已恢复：' + s.transactions + ' 笔账目、' + s.accounts + ' 个账户（重复的已自动跳过 ' + s.skipped + ' 笔）') + (rr.overlayWarning || ''),
             s.failed ? 'err' : 'ok')
         }))
         box.querySelectorAll('[data-vtdel]').forEach(b => b.addEventListener('click', async () => {
@@ -677,7 +731,7 @@ window.Vault = (function () {
       go.disabled = true
       const r = await exportLocal(p1, { hint: ($('#vlHint') || {}).value || '' })
       if (r.error) { renderLocal(r.error, 'err'); return }
-      renderLocal('已发起下载：' + r.count + ' 笔 · ' + kb(r.bytes) + '。请确认文件已保存，建议再传到网盘。', 'ok')
+      renderLocal('已发起下载：' + r.count + ' 笔 · ' + kb(r.bytes) + '。请确认文件已保存，建议再传到网盘。' + (r.overlayWarning || ''), 'ok')
     })
 
     /* 恢复：选文件 → 显示口令框 → 确认 */
@@ -708,12 +762,12 @@ window.Vault = (function () {
       if (r.error) { renderLocal(r.error, 'err'); return }
       const s = r.stats || {}
       if (window.App && window.App.refresh) { try { await window.App.refresh() } catch (e) { /* 忽略 */ } }
-      renderLocal(s.failed
+      renderLocal((s.failed
         ? '恢复完成：' + (s.transactions || 0) + ' 笔账目、' + (s.accounts || 0) + ' 个账户；有 ' + s.failed +
-          ' 笔写入失败（不会被当成重复），再恢复一次即可补回' +
+          ' 项未恢复，已保留当前数据，请核对冲突或网络后重试' +
           (s.skipped ? '，重复已跳过 ' + s.skipped + ' 笔' : '')
         : '恢复完成：' + (s.transactions || 0) + ' 笔账目、' + (s.accounts || 0) + ' 个账户' +
-          (s.skipped ? '（重复已跳过 ' + s.skipped + ' 笔）' : ''), s.failed ? 'err' : 'ok')
+          (s.skipped ? '（重复已跳过 ' + s.skipped + ' 笔）' : '')) + (r.overlayWarning || ''), s.failed ? 'err' : 'ok')
     })
   }
 
