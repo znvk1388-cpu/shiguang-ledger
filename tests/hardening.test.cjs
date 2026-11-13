@@ -180,7 +180,7 @@ test('local overlays are included in JSON backup but secrets are never exported'
 /* ---------- A4 / C5：清单与空态入口 ---------- */
 test('installed app may rotate on tablets and the empty ledger still offers quick entry', () => {
   const manifest = JSON.parse(src('manifest.json'))
-  assert.notEqual(manifest.orientation, 'portrait', '平板横屏布局需要可旋转')
+  assert.equal(manifest.orientation, 'any', '桌面应用必须允许跟随平板横竖屏，natural仍会限制在默认方向')
 
   const product = src('js/product.js')
   assert.match(product, /ledgerEmpty\(\)\) \{\s*\n\s*let quickOnEmpty/, '空账本也要给快捷入口')

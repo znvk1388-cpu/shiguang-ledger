@@ -177,8 +177,8 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   overscroll-behavior:contain; padding:2px 4px; margin:0 -4px;
 }
 .editor-sheet .sheet-foot { position:static; flex:none; margin:8px 0 0; padding:10px 0 0; }
-/* 矮视口让表单独立滚动，保留完整触控面积和可见的保存入口。 */
-@media (max-height:520px) {
+/* 分屏或软键盘压缩高度时提早切换布局，给分类与账户保留可读空间。 */
+@media (max-height:640px) {
   .editor-sheet {
     display:flex; flex-direction:column; height:calc(100dvh - 24px);
     max-height:calc(100dvh - 24px); padding:8px 12px calc(8px + var(--safe-b));
@@ -191,7 +191,7 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   .editor-sheet.kp-open .editor-body { min-height:108px; }
   .editor-sheet.kp-open .sheet-foot { flex-shrink:1; min-height:0; overflow-y:auto; }
 }
-@media (min-width:520px) and (max-height:520px) {
+@media (min-width:520px) and (max-height:640px) {
   .editor-sheet.kp-open {
     left:50%; right:auto; top:50%; bottom:auto; transform:translate(-50%,-50%);
     width:min(900px, calc(100vw - 24px)); max-width:none;
@@ -201,6 +201,9 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
   .editor-sheet.kp-open .sheet-head { grid-column:1; }
   .editor-sheet.kp-open .editor-body { height:100%; min-height:0; }
   .editor-sheet.kp-open .sheet-foot { grid-column:2; grid-row:1 / -1; height:100%; min-height:0; overflow-y:auto; margin:0; padding:0 2px; border:0; }
+}
+@media (min-width:520px) and (max-width:639px) and (max-height:640px) {
+  .editor-sheet.kp-open .cat-grid.five { grid-template-columns:repeat(auto-fit,minmax(56px,1fr)); }
 }
 @media (min-width:520px) and (max-height:360px) {
   .editor-sheet.kp-open { padding-top:4px; padding-bottom:calc(4px + var(--safe-b)); }

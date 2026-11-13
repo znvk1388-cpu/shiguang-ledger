@@ -3895,6 +3895,7 @@ window.UI = (function () {
       const touch = window.matchMedia && window.matchMedia('(pointer:coarse)').matches
       if ((window.innerWidth < 640 || touch) && !editorKpOpen) setKp(true)
     })
+    $('#noteInput').addEventListener('focus', () => setKp(false))
     if (kpWrap) setKp(!!editorKpOpen, false)
     $('#editorBody').scrollTop = keepBodyScroll
     if (kp) kp.addEventListener('pointerdown', e => {

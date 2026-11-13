@@ -1,6 +1,6 @@
 {
   "name": "shiguang-ledger",
-  "version": "1.19.2",
+  "version": "1.19.3",
   "private": true,
   "description": "拾光记账：静态 PWA 与数据完整性回归测试",
   "scripts": {
