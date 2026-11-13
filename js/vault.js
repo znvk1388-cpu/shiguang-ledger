@@ -476,23 +476,23 @@ window.Vault = (function () {
   function persistLine() {
     const ps = window.DB && window.DB.persistState ? window.DB.persistState() : null
     if (ps === true) {
-      return '<div class="tiny muted" style="margin-top:10px">' + ic('check') + ' 本机存储已获持久化授权，浏览器不会自动清理</div>'
+      return '<div class="tiny muted" style="margin-top:10px">' + ic('check') + ' 已开启本机存储保护，仍建议定期备份</div>'
     }
     if (ps === false) {
       return '<div class="tiny" style="margin-top:10px;color:var(--expense)">' +
-        '本机存储未获持久化授权：手机空间紧张时，浏览器可能整站清掉你的账目。' +
+        '浏览器可能清理未保护的数据，建议定期备份。' +
         '<button class="btn sm line" id="bkPersist" style="margin-left:6px">重试申请</button></div>'
     }
-    return '<div class="tiny muted" style="margin-top:10px">正在检测本机存储授权…</div>'
+    return '<div class="tiny muted" style="margin-top:10px">正在检查本机存储保护…</div>'
   }
 
   /* 账目备份与凭证图片是两件事（A5）：JSON 备份不含图片文件，
      分开列两行，用户才不会以为自己「全都备好了」。 */
   function attachLine(isGuest) {
     if (isGuest) {
-      return '<div class="tiny muted" style="margin-top:6px">' + ic('image') + ' 凭证图片：随本机 JSON 备份一起导出（图片以 data URL 内联）</div>'
+      return '<div class="tiny muted" style="margin-top:6px">' + ic('image') + ' 凭证图片会随完整本机备份一起保存</div>'
     }
-    return '<div class="tiny muted" style="margin-top:6px">' + ic('image') + ' 凭证图片：存在云端存储，<b>不进</b> JSON 备份；请用「加密备份到云端」或在本机另存原件</div>'
+    return '<div class="tiny muted" style="margin-top:6px">' + ic('image') + ' 账目备份不含云端凭证原图，请另外保存重要凭证</div>'
   }
 
   /* 当前访问地址展示（放懒加载里省首屏体积）。selector 指向容器元素。 */

@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.19.1'
+  const VERSION = '1.19.2'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -696,18 +696,22 @@ window.App = (function () {
     }
   }
 
-  let tabMotionVersion = 0
+  let tabMotionVersion = 0, pendingTabTop = null
   function setTab(tab) {
     if (tab === 'add') {
       UI.openEditor(null)
       return
     }
     const changed = state.tab !== tab, version = ++tabMotionVersion
+    if (changed) pendingTabTop = tab
     state.tab = tab
     $$('#tabbar .tab').forEach(b => b.classList.toggle('on', b.getAttribute('data-tab') === tab))
     const rendered = refresh()
-    if (changed && typeof UI.animateFeedback === 'function') Promise.resolve(rendered).then(() => {
-      if (version === tabMotionVersion && state.tab === tab) UI.animateFeedback($('#content'), 'page')
+    if (pendingTabTop === tab) Promise.resolve(rendered).then(() => {
+      if (version !== tabMotionVersion || state.tab !== tab) return
+      pendingTabTop = null
+      if (typeof window.scrollTo === 'function') window.scrollTo(0, 0)
+      if (typeof UI.animateFeedback === 'function') UI.animateFeedback($('#content'), 'page')
     }).catch(() => { /* 原有错误界面保持可用 */ })
   }
 
