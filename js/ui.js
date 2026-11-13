@@ -2345,7 +2345,12 @@ window.UI = (function () {
     } catch (e) { /* 忽略 */ }
   }
 
+  const meFolds = new Map()
+  let meRenderVersion = 0
   async function renderMe(st) {
+    const version = ++meRenderVersion, content = $('#content'), context = homeContext(st)
+    const current = () => version === meRenderVersion && content === $('#content') && st.tab === 'me' &&
+      homeContext(st) === context && !$('#mainView.hidden')
     const isGuest = window.DB.mode === 'guest'
     const usage = await S.storageUsage().catch(() => ({ count: 0, bytes: 0 }))
     const txnCount = await S.listTransactions({ limit: 1 }).catch(() => ({ total: 0 }))
@@ -2353,15 +2358,17 @@ window.UI = (function () {
     const budget = S.budgetOf(monthKey, null)
     /* 周期补记的账目数：只取 total，不拉正文 */
     const autoN = await S.listTransactions({ tag: 'auto', limit: 1 }).then(r => r.total || 0).catch(() => 0)
+    if (!current()) return
+    $$('[data-me-fold]', content).forEach(el => meFolds.set(el.dataset.meFold, el.open))
 
     /* 我的页重排（P1-5）：39 项平铺 4.3 屏、没有分组标题，找「加密备份」要滑很久。
        现在按五组归类（记账设置 / 账户与预算 / 报表与凭证 / 数据与安全 / 外观与提醒
        / 帮助与关于），演示与开发项收进折叠的「高级」。 */
     const it = (id, icon, title, sub, subId, label, labelId) =>
-      '<div class="list-item" id="' + id + '"><div class="ico">' + icon + '</div>' +
-      '<div class="grow"><div>' + title + '</div>' +
-      (sub ? '<div class="small muted"' + (subId ? ' id="' + subId + '"' : '') + '>' + sub + '</div>' : '') +
-      '</div><span class="muted"' + (labelId ? ' id="' + labelId + '"' : '') + '>' + (label || '›') + '</span></div>'
+      '<button type="button" class="list-item me-action" id="' + id + '"><span class="ico">' + icon + '</span>' +
+      '<span class="grow"><span>' + title + '</span>' +
+      (sub ? '<span class="small muted"' + (subId ? ' id="' + subId + '"' : '') + '>' + sub + '</span>' : '') +
+      '</span><span class="muted me-action-tail"' + (labelId ? ' id="' + labelId + '"' : ' aria-hidden="true"') + '>' + (label || '›') + '</span></button>'
     const grp = (title, items) => '<div class="me-group"><div class="grp-title">' + title + '</div>' +
       '<div class="card" style="padding:0">' + items.join('') + '</div></div>'
     /* 可折叠分组（C4）：「我的」页 7 组平铺要滑 2~3 屏，找备份/锁屏要滑很久。
@@ -2369,7 +2376,7 @@ window.UI = (function () {
        报表与凭证、外观与提醒、帮助与关于默认收起。
        注意用 <details> 而不是把内容从 DOM 里摘掉 —— 按钮与 id 必须继续存在，
        既有测试和「跳到某个设置」的深链都依赖它们。 */
-    const grpFold = (title, items, open) => '<details class="me-group me-fold"' + (open ? ' open' : '') + '>' +
+    const grpFold = (title, items, open) => '<details class="me-group me-fold" data-me-fold="' + esc(title) + '"' + ((meFolds.has(title) ? meFolds.get(title) : open) ? ' open' : '') + '>' +
       '<summary class="grp-title">' + title + '</summary>' +
       '<div class="card" style="padding:0">' + items.join('') + '</div></details>'
 
@@ -2380,12 +2387,12 @@ window.UI = (function () {
       '<div class="kv"><span>凭证图片</span><b class="num">' + usage.count + ' 张' + (usage.bytes ? ' · ' + F.bytes(usage.bytes) : '') + '</b></div>' +
       '<div class="kv"><span>' + (isGuest ? '数据位置' : '云端存储') + '</span><b>' + (isGuest ? '本机浏览器（未同步）' : '已开通 · 请确认同步状态') + '</b></div>' +
       '</div>' +
-      '<div class="card" style="padding:0"><div class="list-item" id="budgetRow">' +
-      '<div class="ico">' + ic('target') + '</div>' +
-      '<div class="grow"><div>本月总预算</div><div class="small muted" id="budgetVal">' + (budget != null ? '¥' + budget : '未设置') + '</div></div>' +
-      '<span class="muted">›</span></div>' +
+      '<div class="card" style="padding:0"><button type="button" class="list-item me-action" id="budgetRow" aria-expanded="false" aria-controls="budgetEdit">' +
+      '<span class="ico">' + ic('target') + '</span>' +
+      '<span class="grow"><span>本月总预算</span><span class="small muted" id="budgetVal">' + (budget != null ? '¥' + budget : '未设置') + '</span></span>' +
+      '<span class="muted" aria-hidden="true">›</span></button>' +
       '<div id="budgetEdit" class="hidden" style="padding:12px 14px">' +
-      '<div class="row"><input id="budgetInput" class="input grow" type="number" step="1" inputmode="decimal" placeholder="设置本月预算（元）" value="' + (budget != null ? budget : '') + '">' +
+      '<div class="row"><input id="budgetInput" class="input grow" type="number" aria-label="本月总预算（元）" step="1" inputmode="decimal" placeholder="设置本月预算（元）" value="' + (budget != null ? budget : '') + '">' +
       '<button class="btn" id="budgetSave" style="flex:none">保存</button></div>' +
       '<div class="small muted" style="margin-top:6px">留空并保存可清除预算</div></div></div>' +
       grp('记账设置', [
@@ -2435,7 +2442,7 @@ window.UI = (function () {
         it('privacyBtn2', '' + ic('shield') + '', '用户隐私保护指引', '我们收集什么、怎么用、你有哪些权利'),
         it('aboutBtn', '' + ic('info') + '', '关于拾光记账', '版本 · 数据与隐私说明', 'aboutSub'),
       ]) +
-      '<details class="me-adv"><summary>高级 · 演示与开发</summary>' +
+      '<details class="me-adv" data-me-fold="advanced"' + (meFolds.get('advanced') ? ' open' : '') + '><summary>高级 · 演示与开发</summary>' +
       '<div class="card" style="padding:0">' +
       it('demoBtn', '' + ic('zap') + '', '查看记账示例', '预览虚构数据，不修改账本') +
       it('seedBtn', '' + ic('sparkles') + '', '重置为推荐分类', '在现有分类之外补充一套') +
@@ -2443,10 +2450,14 @@ window.UI = (function () {
       (isGuest ? '' : '<button class="btn danger block" id="logoutBtn" style="margin-top:12px">退出登录</button>') +
       '<p class="hint">v' + (window.App.version || '—') + ' · ' + (isGuest ? '绑定后数据只属于你本人，服务端按账号隔离' : '数据只属于你本人，服务端按账号隔离') + '</p>'
 
+    $$('[data-me-fold]', content).forEach(el => el.addEventListener('toggle', () => {
+      if (el.isConnected) meFolds.set(el.dataset.meFold, el.open)
+    }))
     const shb2 = $('#syncHubBtn')
     if (shb2) shb2.addEventListener('click', openSyncHub)
     /* 数据安全状态卡：登录 / 导出加密备份（卡片内容由懒加载模块填充） */
     fillBackupCard().then(() => {
+      if (!current()) return
       const bkLocal = $('#bkLocal')
       if (bkLocal) bkLocal.addEventListener('click', () => {
         Lazy.need('vault').then(m => m && m.openLocalSheet && m.openLocalSheet())
@@ -2455,13 +2466,20 @@ window.UI = (function () {
       if (bkLogin) bkLogin.addEventListener('click', () => window.App.backToAuth())
     })
     const budgetRowEl = $('#budgetRow')
-    if (budgetRowEl) budgetRowEl.addEventListener('click', () => { const ed = $('#budgetEdit'); if (ed) ed.classList.toggle('hidden') })
+    if (budgetRowEl) budgetRowEl.addEventListener('click', () => {
+      const ed = $('#budgetEdit')
+      if (!ed) return
+      const expanded = ed.classList.toggle('hidden') === false
+      budgetRowEl.setAttribute('aria-expanded', String(expanded))
+      if (expanded) $('#budgetInput').focus({ preventScroll: true })
+    })
     $('#budgetSave').addEventListener('click', async () => {
       const v = $('#budgetInput').value.trim()
       try {
         await S.setBudget(monthKey, null, v === '' ? 0 : Number(v))
         const bv = $('#budgetVal'); if (bv) bv.textContent = v === '' ? '未设置' : '¥' + v
         const ed = $('#budgetEdit'); if (ed) ed.classList.add('hidden')
+        if (budgetRowEl && budgetRowEl.isConnected) budgetRowEl.setAttribute('aria-expanded', 'false')
         toast('预算已保存')
       } catch (e) { toast('保存失败') }
     })
@@ -2926,7 +2944,7 @@ window.UI = (function () {
       (isGuest ? '备份包含账目、图片、账本、预算、目标，以及当前身份的报销进度、对账标记等本机设置。'
                : '备份包含账目、账户、分类、账本、预算、周期规则、目标，以及报销进度、对账标记等本机设置。') +
       '旧版目标联动、预算结转、分类规则等无身份信息的本机设置不会自动认领，导出后会列出未覆盖项目；请保留原设备和旧副本。' +
-      (isGuest ? '游客图片已内联在文件中，模板和回收站账目一并备份。' : '<b>不含凭证图片文件</b>、模板和回收站账目；云端凭证原图请另外保存。') +
+      (isGuest ? '图片会保存在备份文件中，模板和回收站账目一并备份。' : '<b>不含凭证图片文件</b>、模板和回收站账目；云端凭证原图请另外保存。') +
       '</div>' +
       '<button class="btn block" id="bakExport">导出账目备份</button>' +
       '<div class="divider">恢复</div>' +

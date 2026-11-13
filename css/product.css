@@ -351,3 +351,16 @@ html[data-theme="dark"] .tabbar .tab.mid .sg-icon { color:#101c33; }
 
 .batch-active:not(.sheet-open) .toast { bottom:calc(var(--batch-height,100px) + 76px + var(--safe-b)); }
 @media (min-width:760px) and (min-height:560px) { .batch-active:not(.sheet-open) .toast { bottom:calc(var(--batch-height,100px) + 20px + var(--safe-b)); } }
+
+/* 设置行保留列表节奏，同时提供原生按钮的键盘与触屏反馈。 */
+.me-action { width:100%; margin:0; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--text); font:inherit; text-align:left; cursor:pointer; }
+.me-action .grow > span { display:block; }
+.me-action .small { margin-top:2px; line-height:1.5; }
+.me-action-tail { flex:none; margin-left:8px; }
+.me-group > .card, .me-adv > .card { overflow:hidden; }
+.me-action:focus-visible { outline-offset:-3px; }
+.me-action:active { background:var(--brand-soft); }
+@media (hover:hover) { .me-action:hover { background:var(--brand-soft); } }
+.me-fold > summary, .me-adv > summary { display:flex; align-items:center; min-height:44px; padding:8px 6px; gap:12px; list-style:none; }
+.me-fold > summary::after { float:none; margin-left:auto; flex:none; }
+@media (min-width:640px) { .sheet { border-radius:var(--r-lg); } }
