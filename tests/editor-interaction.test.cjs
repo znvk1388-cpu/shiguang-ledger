@@ -131,3 +131,21 @@ test('打开更多操作时将菜单送到可见区域并聚焦第一项', async
     assert.equal(h.$('#edMore').getAttribute('aria-expanded'), 'true')
   } finally { h.dom.window.close() }
 })
+
+test('输入备注时收起数字键盘并保留草稿，返回金额可再次展开', async () => {
+  const h = await setup()
+  try {
+    h.$('#amtInput').value = '12.5'
+    h.$('#noteInput').value = '平板午餐'
+    h.$('#amtBox').click()
+    assert.equal(h.$('#sheet').classList.contains('kp-open'), true)
+    h.$('#noteInput').focus()
+    assert.equal(h.$('#keypadWrap').classList.contains('hidden'), true, '避免与系统文字键盘同时占据窗口')
+    assert.equal(h.$('#sheet').classList.contains('kp-open'), false)
+    assert.equal(h.$('#amtInput').value, '12.5')
+    assert.equal(h.$('#noteInput').value, '平板午餐')
+    assert.equal(h.saved(), 0)
+    h.$('#amtBox').click()
+    assert.equal(h.$('#sheet').classList.contains('kp-open'), true)
+  } finally { h.dom.window.close() }
+})
