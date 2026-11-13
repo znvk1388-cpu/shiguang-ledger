@@ -21,7 +21,12 @@ test('smoke rejects an inert blank page even without console errors', { skip: !e
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   try {
     const result = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, ['tools/smoke.mjs', `http://127.0.0.1:${server.address().port}/`], {
+      // Linux无桌面CI需要独立会话总线，避免Chrome在启动阶段等待自动发现。
+      // 仅包裹本次测试进程；smoke内部仍直接拥有并清理其Chrome子进程。
+      const args = ['tools/smoke.mjs', `http://127.0.0.1:${server.address().port}/`]
+      const command = process.platform === 'linux' ? 'dbus-run-session' : process.execPath
+      if (process.platform === 'linux') args.unshift('--', process.execPath)
+      const child = spawn(command, args, {
         cwd: root, env: { ...process.env, CHROME_PATH: chrome }, stdio: ['ignore', 'pipe', 'pipe']
       })
       let output = '', stdout = ''
@@ -31,7 +36,7 @@ test('smoke rejects an inert blank page even without console errors', { skip: !e
       child.on('close', code => resolve({ code, output, stdout }))
     })
     assert.notEqual(result.code, 0, '没有游客入口、数据或交互的页面不能验收通过：\n' + result.output)
-    assert.match(result.output, /游客入口/, '必须因页面缺少游客入口而失败，不能因浏览器启动错误误通过')
+    assert.match(result.output, /游客入口/, '必须因页面缺少游客入口而失败，不能因浏览器启动错误误通过：\n' + result.output)
     const report = JSON.parse(result.stdout)
     assert.equal(path.dirname(report.profile), path.join(root, 'shots'))
     assert.equal(existsSync(report.profile), false, '失败退出后必须清理本次独立 profile')
@@ -74,3 +79,19 @@ test('process completion handles spawn failure and a process that has already ex
  const failed=new EventEmitter();failed.exitCode=null;failed.signalCode=null;const done=waitForProcessExit(failed);failed.emit('error',Error('spawn failed'));await done;
  const exited=new EventEmitter();exited.exitCode=0;exited.signalCode=null;await waitForProcessExit(exited);
 });
+
+test('process completion does not mistake a failed termination signal for exit', async () => {
+  const { EventEmitter } = require('node:events')
+  const { waitForProcessExit } = await import('../tools/smoke.mjs')
+  const child = new EventEmitter()
+  Object.assign(child, { pid: 12345, exitCode: null, signalCode: null })
+  let completed = false
+  const done = waitForProcessExit(child).then(() => { completed = true })
+  child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM' }))
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(completed, false, '终止信号失败不代表浏览器已经退出')
+  child.emit('exit', 0, null)
+  await done
+  assert.equal(completed, true)
+})

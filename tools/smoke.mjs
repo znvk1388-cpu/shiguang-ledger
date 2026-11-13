@@ -16,8 +16,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 export function waitForProcessExit(child) {
   if (child.exitCode != null || child.signalCode != null) return Promise.resolve()
   return new Promise(resolve => {
-    const done = () => { child.removeListener('exit', done); child.removeListener('error', done); resolve() }
-    child.once('exit', done); child.once('error', done)
+    const done = () => { child.removeListener('exit', done); child.removeListener('error', onError); resolve() }
+    // 没有 pid 的启动失败才可视为无需等待；kill 失败仍须等待真实 exit。
+    const onError = () => { if (child.pid == null) done() }
+    child.once('exit', done); child.on('error', onError)
   })
 }
 
