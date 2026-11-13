@@ -13,6 +13,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SHOTS = join(ROOT, 'shots')
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
+export function waitForProcessExit(child) {
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve()
+  return new Promise(resolve => {
+    const done = () => { child.removeListener('exit', done); child.removeListener('error', done); resolve() }
+    child.once('exit', done); child.once('error', done)
+  })
+}
+
 export function evaluationValue(result) {
   if (result.exceptionDetails) {
     const detail = result.exceptionDetails
@@ -47,12 +55,13 @@ async function main() {
     `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
     '--window-size=390,844', '--force-device-scale-factor=1', 'about:blank'], { stdio: ['ignore', 'pipe', 'pipe'] })
   chrome.stdout.resume(); chrome.stderr.resume()
-  let launchError, announcedPort, exited = false, ws, seq = 1
+  let launchError, announcedPort, exited = false, ws, seq = 1, failure, browserStderr = ''
   chrome.stderr.on('data', data => {
+    browserStderr = (browserStderr + String(data)).slice(-4000)
     const match = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(String(data))
     if (match) announcedPort = Number(match[1])
   })
-  const closed = new Promise(resolve => chrome.once('close', () => { exited = true; resolve() }))
+  const closed = waitForProcessExit(chrome).then(() => { exited = true })
   chrome.once('error', error => { launchError = error })
   const pending = new Map(), errors = [], exceptions = [], out = { url, profile }
   const send = (method, params = {}) => new Promise((res, rej) => {
@@ -156,18 +165,29 @@ async function main() {
     assert.deepEqual(out.persisted.rows, out.afterBatch.rows, '冒烟断言失败：重载后金额或分类未持久化')
     assert.equal(errors.length + exceptions.length, 0, '冒烟断言失败：页面存在错误')
     out.ok = true
+  } catch (error) {
+    failure = error
+    throw error
   } finally {
     out.errors = errors; out.exceptions = exceptions
+    if (!out.ok) out.browserStderr = browserStderr
     console.log(JSON.stringify(out, null, 2))
-    if (ws?.readyState === WebSocket.OPEN) {
-      try { await send('Browser.close') } catch (e) { /* 浏览器可能先关闭连接 */ }
+    try {
+      if (ws?.readyState === WebSocket.OPEN) {
+        try { await send('Browser.close') } catch (e) { /* 浏览器可能先关闭连接 */ }
+      }
+      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close()
+      await Promise.race([closed, sleep(2000)])
+      if (!exited) { chrome.kill(); await Promise.race([closed, sleep(3000)]) }
+      if (!exited) { chrome.kill('SIGKILL'); await Promise.race([closed, sleep(3000)]) }
+      assert.ok(exited, 'Chrome 未退出，保留测试 profile 供检查')
+      chrome.stdout.destroy(); chrome.stderr.destroy()
+      rmSync(safeProfilePath(profile), { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      assert.equal(errors.length + exceptions.length, 0, '冒烟断言失败：页面存在错误')
+    } catch (cleanupError) {
+      if (!failure) throw cleanupError
+      console.error('浏览器清理失败：' + cleanupError.message)
     }
-    if (ws && ws.readyState !== WebSocket.CLOSED) ws.close()
-    await Promise.race([closed, sleep(2000)])
-    if (!exited) { chrome.kill(); await Promise.race([closed, sleep(3000)]) }
-    assert.ok(exited, 'Chrome 未退出，保留测试 profile 供检查')
-    rmSync(safeProfilePath(profile), { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    assert.equal(errors.length + exceptions.length, 0, '冒烟断言失败：页面存在错误')
   }
 }
 

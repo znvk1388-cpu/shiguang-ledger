@@ -63,3 +63,14 @@ test('profile cleanup accepts only dedicated direct children of repository shots
     fs.rmSync(fixture, { recursive: true, force: true })
   }
 })
+
+test('process completion follows exit even when inherited stdio has not closed',async()=>{
+ const {EventEmitter}=require('node:events'),{waitForProcessExit}=await import('../tools/smoke.mjs');
+ const child=new EventEmitter();child.exitCode=null;child.signalCode=null;const done=waitForProcessExit(child);child.emit('exit',0,null);
+ assert.equal(await Promise.race([done.then(()=>true),new Promise(r=>setTimeout(()=>r(false),30))]),true);
+});
+test('process completion handles spawn failure and a process that has already exited',async()=>{
+ const {EventEmitter}=require('node:events'),{waitForProcessExit}=await import('../tools/smoke.mjs');
+ const failed=new EventEmitter();failed.exitCode=null;failed.signalCode=null;const done=waitForProcessExit(failed);failed.emit('error',Error('spawn failed'));await done;
+ const exited=new EventEmitter();exited.exitCode=0;exited.signalCode=null;await waitForProcessExit(exited);
+});
