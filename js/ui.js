@@ -1506,6 +1506,36 @@ window.UI = (function () {
     return JSON.stringify([S.mode, reimbKey(), S.activeBookId ? S.activeBookId() : null,
       st.statRange, st.scope, st.year, st.month])
   }
+  /* ---------- 无支出日（no-spend day） ----------
+     NoBuy / Kept 类无消费挑战的统计口径：支出为 ¥0 的日子算无支出日，
+     转账与收入不影响。纯函数便于回归测试；expenseDays 是本月有支出
+     记录的日期键（YYYY-MM-DD）数组，today 为同格式的今天。返回 null
+     表示未来月份没有可统计的日子，界面不显示该卡片。 */
+  function noSpendStats(expenseDays, year, month, today) {
+    const key = (y, m, d) => y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0')
+    const set = new Set(expenseDays || [])
+    const dim = new Date(year, month, 0).getDate()
+    const t = new Date(today + 'T00:00:00')
+    const inMonth = t.getFullYear() === year && t.getMonth() + 1 === month
+    if (t < new Date(year, month - 1, 1)) return null /* 未来月份：没有可统计的日子 */
+    const passed = inMonth ? t.getDate() : dim
+    const spent = d => set.has(key(year, month, d))
+    let noSpend = 0
+    for (let d = 1; d <= passed; d++) if (!spent(d)) noSpend++
+    let longest = 0
+    let run = 0
+    for (let d = 1; d <= passed; d++) {
+      if (!spent(d)) { run++; if (run > longest) longest = run } else run = 0
+    }
+    /* 当前连续：今天还没花就把今天算上；今天已花则从昨天起算（破戒不清零：
+       累计的无支出天数不受影响，只有「当前连续」从下一次重新起算）。 */
+    let current = 0
+    let d = inMonth ? passed : 0
+    if (d >= 1 && spent(d)) d--
+    while (d >= 1 && !spent(d)) { current++; d-- }
+    return { noSpend, longest, current, passed, daysInMonth: dim }
+  }
+
   async function renderStats(st) {
     const content = $('#content'), version = ++statsRenderVersion
     const context = statsContext(st), snapshot = Object.assign({}, st)
@@ -1643,6 +1673,27 @@ window.UI = (function () {
 
     const flowCard = await renderFlowCard(st)
     const budgetCard = await budgetExecCard(st, expense, true)
+
+    /* 无支出日卡片：本月至少有一笔支出才显示，避免空账本把「一笔都没花」
+       误读成自律；只多一次本月流水读取，口径与年度账单的逐天统计一致。 */
+    let noSpendCard = ''
+    if (expense > 0) {
+      const res = await S.listTransactions({ from, to, limit: 20000 })
+      const spentDays = []
+      ;(res.rows || []).forEach(t => {
+        if (t.txn_type === 'expense') spentDays.push(F.isoDay(t.occurred_at))
+      })
+      const ns = noSpendStats(spentDays, st.year, st.month, F.dstr(new Date()))
+      if (ns) {
+        noSpendCard = '<div class="card">' +
+          '<div class="between" style="margin-bottom:6px"><b>无支出日</b><span class="small muted">' + st.month + '月 · 已过 ' + ns.passed + ' 天</span></div>' +
+          '<div class="kv"><span>本月无支出</span><b class="num">' + ns.noSpend + ' / ' + ns.passed + ' 天</b></div>' +
+          '<div class="kv"><span>当前连续</span><b class="num">' + ns.current + ' 天</b></div>' +
+          '<div class="kv"><span>本月最长连续</span><b class="num">' + ns.longest + ' 天</b></div>' +
+          '<div class="tiny muted" style="margin-top:6px">支出为 ¥0 的日子算无支出日，转账不计；今天还没花的也先算上，花了从明天重新起算，已累计的天数不清零。</div>' +
+          '</div>'
+      }
+    }
     const dnum = new Date(st.year, st.month, 0).getDate()
     const passed = (new Date() >= F.monthStart(st.year, st.month) && new Date() < F.monthEnd(st.year, st.month))
       ? new Date().getDate() : dnum
@@ -1713,6 +1764,7 @@ window.UI = (function () {
           '<div style="margin-top:6px;margin-bottom:2px" class="small muted">分类异动 Top3</div>' + moverHtml
         : '<div class="small muted">上月没有记录，下个月就能看到环比</div>') +
       '</div>' +
+      noSpendCard +
       (catBudgetRows
         ? '<div class="card"><div class="between" style="margin-bottom:10px"><b>分类预算</b><span class="small muted">本月进度</span></div>' + catBudgetRows + '</div>'
         : '') +
@@ -4320,7 +4372,7 @@ window.UI = (function () {
     importCsvText, parseCsvText, commitRows, openImportPreview, budgetExecCard, openMonthBudget, openLockSettings,
     openHelp, openInstallGuide, openAbout, openDemoData,
     openPrivacy, openTerms, needConsent, markConsent,
-    openSyncHub, replayOnboard, exportCsv,
+    openSyncHub, replayOnboard, exportCsv, noSpendStats,
     collectOverlays, applyOverlays, backupImportWarning,
   }
 })()

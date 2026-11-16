@@ -50,6 +50,8 @@ window.Insight = (function () {
       '<span class="small muted report-title">固定支出 · 高频小额 · 环比异常</span></span><span class="muted">›</span></button>' +
       '<button type="button" class="list-item report-entry" id="rpY"><span class="ico">' + ic('trending-up') + '</span><span class="grow"><span class="report-title">年同比（YoY）</span>' +
       '<span class="small muted report-title">今年 vs 去年逐月对比</span></span><span class="muted">›</span></button>' +
+      '<button type="button" class="list-item report-entry" id="rpFy"><span class="ico">' + ic('calendar') + '</span><span class="grow"><span class="report-title">财年报告</span>' +
+      '<span class="small muted report-title">自定义起始月 · 跨自然年看一整年</span></span><span class="muted">›</span></button>' +
       '<button type="button" class="list-item report-entry" id="rpT"><span class="ico">' + ic('chart-bar') + '</span><span class="grow"><span class="report-title">分类趋势</span>' +
       '<span class="small muted report-title">各大类近 12 个月走势</span></span><span class="muted">›</span></button>' +
       '<button type="button" class="list-item report-entry" id="rpA"><span class="ico">' + ic('file-text') + '</span><span class="grow"><span class="report-title">账户对账单</span>' +
@@ -72,6 +74,7 @@ window.Insight = (function () {
     document.getElementById('rpH').addEventListener('click', () => openHealth())
     document.getElementById('rpAudit').addEventListener('click', () => openAudit())
     document.getElementById('rpY').addEventListener('click', () => openYoY())
+    document.getElementById('rpFy').addEventListener('click', () => openFyReport())
     document.getElementById('rpT').addEventListener('click', () => openCatTrend())
     document.getElementById('rpA').addEventListener('click', () => openStatementPicker())
     document.getElementById('rpG').addEventListener('click', () => openGallerySheet())
@@ -1422,10 +1425,113 @@ window.Insight = (function () {
     })
   }
 
+  /* ---------- 财年报告（自定义财年起始月） ----------
+     Ocular 式自定义财年：从任一月份起的连续 12 个月算一个财年，
+     适合 4 月制 / 7 月制等不按自然年记账的口径。只读聚合，不改账目
+     数据结构；起始月选择保存在本机（ledger10_fy_month）。 */
+  function fyMonths(nowY, nowM, startMonth) {
+    const sm = Math.min(12, Math.max(1, Math.floor(Number(startMonth) || 1)))
+    const startY = nowM >= sm ? nowY : nowY - 1
+    const months = []
+    for (let i = 0; i < 12; i++) {
+      const idx = sm - 1 + i
+      months.push({ y: startY + Math.floor(idx / 12), m: (idx % 12) + 1 })
+    }
+    const endM = sm === 1 ? 12 : sm - 1
+    const endY = sm === 1 ? startY : startY + 1
+    return { months, startY, startMonth: sm, label: startY + '年' + sm + '月 – ' + endY + '年' + endM + '月' }
+  }
+  async function fyAggregate(startMonth) {
+    const now = new Date()
+    const fy = fyMonths(now.getFullYear(), now.getMonth() + 1, startMonth)
+    const first = fy.months[0]
+    const last = fy.months[11]
+    const from = F.iso(new Date(first.y, first.m - 1, 1))
+    const to = F.iso(new Date(last.y, last.m, 1)) /* 开区间：末月次月 1 号 */
+    const prevFrom = F.iso(new Date(first.y - 1, first.m - 1, 1))
+    const [rows, prevRows, cats] = await Promise.all([
+      S.monthlySummary(from, to).catch(() => []),
+      S.monthlySummary(prevFrom, from).catch(() => []),
+      S.categorySummary(from, to, 'expense').catch(() => null),
+    ])
+    const byKey = {}
+    ;(rows || []).forEach(r => { byKey[r.month_key] = r })
+    const prevByKey = {}
+    ;(prevRows || []).forEach(r => { prevByKey[r.month_key] = r })
+    let income = 0, expense = 0, prevExpense = 0
+    const months = fy.months.map(({ y, m }) => {
+      const r = byKey[y + '-' + F.pad2(m)]
+      const p = prevByKey[(y - 1) + '-' + F.pad2(m)]
+      const e = r ? F.toCents(r.expense) : 0
+      const inc = r ? F.toCents(r.income) : 0
+      income += inc
+      expense += e
+      if (p) prevExpense += F.toCents(p.expense)
+      return { y, m, expense: e, income: inc }
+    })
+    const catsList = (cats || []).filter(c => c.category_id != null).map(c => {
+      const cat = S.category(c.category_id)
+      return { name: cat ? cat.name : '未分类', value: F.toCents(c.total) }
+    }).sort((a, b) => b.value - a.value).slice(0, 8)
+    return { fy, from, to, months, income, expense, prevExpense, catsList }
+  }
+  async function fyBodyHtml(startMonth) {
+    const esc = F.escapeHtml
+    const d = await fyAggregate(startMonth)
+    const fy = d.fy
+    const balance = d.income - d.expense
+    const yoy = d.prevExpense > 0 ? (d.expense - d.prevExpense) / d.prevExpense * 100 : null
+    const finished = new Date() >= new Date(d.to)
+    const monthRows = d.months.map(({ y, m, expense, income }) =>
+      metricRow((y % 100) + '年' + m + '月', '¥' + F.yuan(expense), expense > 0 ? 'var(--text)' : 'var(--sub)', '收入 ¥' + F.yuan(income))
+    ).join('')
+    return '<div class="card">' +
+      metricRow('财年总支出', '¥' + F.yuan(d.expense), 'var(--expense)', fy.label) +
+      metricRow('财年总收入', '¥' + F.yuan(d.income), 'var(--income)', '同一期间') +
+      metricRow('财年结余', '¥' + F.yuan(balance), balance >= 0 ? 'var(--income)' : 'var(--expense)', '收入 − 支出') +
+      (yoy != null ? metricRow('上一财年对比', (yoy > 0 ? '↑ ' : '↓ ') + Math.abs(yoy).toFixed(0) + '%',
+        yoy > 0 ? 'var(--expense)' : 'var(--income)',
+        '上财年支出 ¥' + F.yuan(d.prevExpense) + (finished ? '' : '；本财年还没结束，不代表整年结果')) : '') +
+      '</div>' +
+      '<div class="card"><div class="between" style="margin-bottom:8px"><b>逐月支出</b><span class="tiny muted">小字为当月收入</span></div>' +
+      monthRows + '</div>' +
+      (d.catsList.length
+        ? '<div class="card"><div class="between" style="margin-bottom:8px"><b>支出结构 Top8</b><span class="tiny muted">按大类</span></div>' +
+          d.catsList.map(c => '<div class="kv"><span class="ellipsis">' + esc(c.name) + '</span><b class="num">¥' + F.yuan(c.value) + '</b></div>').join('') +
+          '</div>'
+        : '')
+  }
+  async function openFyReport() {
+    let saved = Math.floor(Number(localStorage.getItem('ledger10_fy_month')) || 1)
+    if (!(saved >= 1 && saved <= 12)) saved = 1
+    const opts = []
+    for (let m = 1; m <= 12; m++) {
+      opts.push('<option value="' + m + '"' + (m === saved ? ' selected' : '') + '>' + m + ' 月</option>')
+    }
+    U().openSheet(
+      '<div class="sheet-head"><span class="sheet-title">财年报告</span><button id="fyClose" class="btn sm line">关闭</button></div>' +
+      '<div class="card"><div class="between" style="margin-bottom:8px"><b>财年起始月</b><span class="small muted">从该月起连续 12 个月</span></div>' +
+      '<div class="row" style="gap:8px"><label class="small muted" for="fyMonth">起始月</label>' +
+      '<select id="fyMonth" class="select grow" aria-label="财年起始月">' + opts.join('') + '</select></div>' +
+      '<div class="tiny muted" style="margin-top:6px">选择只保存在本机，不改账目与预算。</div></div>' +
+      '<div id="fyBody"><div class="card"><div class="small muted" style="text-align:center;padding:8px 0">正在计算…</div></div></div>'
+    )
+    document.getElementById('fyClose').addEventListener('click', U().closeSheet)
+    const body = document.getElementById('fyBody')
+    const render = async () => { body.innerHTML = await fyBodyHtml(saved) }
+    document.getElementById('fyMonth').addEventListener('change', e => {
+      saved = Math.floor(Number(e.target.value) || 1)
+      try { localStorage.setItem('ledger10_fy_month', String(saved)) } catch (err) { /* 忽略 */ }
+      render()
+    })
+    await render()
+  }
+
   return {
     openReportCenter, openMonthReport, openHealth, openAudit, openYoY, openCatTrend, openStatement, openStatementPicker,
     openGallerySheet, galleryData, openTagManager, openTagReport, makePoster, exportFilteredCsv,
     buildReportImage, showReportImage, exportYearImage,
+    openFyReport, fyMonths, fyAggregate,
   }
 })()
 
