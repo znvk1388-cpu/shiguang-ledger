@@ -629,40 +629,72 @@
   }
 
   /* 固定支出 · 订阅：把「周期记账」里激活的支出规则按月均成本汇总，
-     让用户一眼看清每月被订阅吃掉多少钱（v1.16 从 ui.js 搬来，省首屏预算）。 */
+     让用户一眼看清每月被订阅吃掉多少钱（v1.16 从 ui.js 搬来，省首屏预算）。
+     v1.19.5（Wallos 式续费日视角）：按距下次扣款天数排序，
+     逾期 / 今天 / 7 天内到期红字高亮；纯函数暴露给测试。 */
+
+  /* 月均成本（分）：daily×30、weekly×4.33、yearly÷12，与 v1.16 口径一致。 */
+  function subMonthlyCost(r) {
+    const c = F.toCents(r.amount)
+    if (r.freq === 'daily') return Math.round(c * 30)
+    if (r.freq === 'weekly') return Math.round(c * 4.33)
+    if (r.freq === 'yearly') return Math.round(c / 12)
+    return c
+  }
+
+  /* 下次扣款日：last_run_date 优先（上次已扣，顺延一个周期），
+     否则用 start_date 本身；返回 { date: 'YYYY-MM-DD', days: 距 today 天数 }。
+     today 缺省用真实今天；无有效日期返回 null。 */
+  function subNextDue(r, today) {
+    const last = r.last_run_date ? String(r.last_run_date).slice(0, 10) : null
+    const start = String(r.start_date || '').slice(0, 10)
+    const base = last || start
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return null
+    const d = new Date(+base.slice(0, 4), +base.slice(5, 7) - 1, +base.slice(8, 10))
+    if (last) {
+      if (r.freq === 'daily') d.setDate(d.getDate() + 1)
+      else if (r.freq === 'weekly') d.setDate(d.getDate() + 7)
+      else if (r.freq === 'monthly') d.setMonth(d.getMonth() + 1)
+      else d.setFullYear(d.getFullYear() + 1)
+    }
+    const iso = F.dstr(d)
+    const t = today && /^\d{4}-\d{2}-\d{2}$/.test(today) ? today : F.dstr(new Date())
+    const due = new Date(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10))
+    const td = new Date(+t.slice(0, 4), +t.slice(5, 7) - 1, +t.slice(8, 10))
+    return { date: iso, days: Math.round((due - td) / 86400000) }
+  }
+
+  const SUB_DUE_SOON = 7   /* N 天内到期算「快扣款了」，红字提醒 */
+
   async function openSubscriptionSheet() {
     const ic = window.ic || function () { return '' }
     const rules = (await S.listRecurring()).filter(r => r.active && r.txn_type === 'expense')
-    const FREQ = { daily: '每天', weekly: '每周', monthly: '每月', yearly: '每年' }
-    const monthlyCost = r => {
-      const c = F.toCents(r.amount)
-      if (r.freq === 'daily') return Math.round(c * 30)
-      if (r.freq === 'weekly') return Math.round(c * 4.33)
-      if (r.freq === 'yearly') return Math.round(c / 12)
-      return c
-    }
-    const nextDue = r => {
-      const last = r.last_run_date ? String(r.last_run_date).slice(0, 10) : null
-      const start = String(r.start_date).slice(0, 10)
-      const base = last || start
-      const d = new Date(+base.slice(0, 4), +base.slice(5, 7) - 1, +base.slice(8, 10))
-      if (last) {
-        if (r.freq === 'daily') d.setDate(d.getDate() + 1)
-        else if (r.freq === 'weekly') d.setDate(d.getDate() + 7)
-        else if (r.freq === 'monthly') d.setMonth(d.getMonth() + 1)
-        else d.setFullYear(d.getFullYear() + 1)
-      }
-      return F.dstr(d)
-    }
     let total = 0
-    rules.forEach(r => { total += monthlyCost(r) })
-    const rows = rules.map(r => {
+    rules.forEach(r => { total += subMonthlyCost(r) })
+    const todayIso = F.dstr(new Date())
+    /* 快扣款的排前面（逾期最先），扣款日推算失败的保持原位沉底。 */
+    const ordered = rules
+      .map((r, i) => ({ r, i, due: subNextDue(r, todayIso) }))
+      .sort((a, b) => {
+        const da = a.due ? a.due.days : 99999 + a.i
+        const db = b.due ? b.due.days : 99999 + b.i
+        return da - db || a.i - b.i
+      })
+    const rows = ordered.map(({ r, due }) => {
       const name = r.note || (r.category_id ? S.categoryName(r.category_id) : '支出')
+      let dueText = ' · 下次 ' + (due ? due.date : '—')
+      let warn = false
+      if (due) {
+        if (due.days < 0) { dueText = ' · 已逾期 ' + (-due.days) + ' 天（' + due.date + '）'; warn = true }
+        else if (due.days === 0) { dueText = ' · 今天扣款'; warn = true }
+        else if (due.days <= SUB_DUE_SOON) { dueText = ' · ' + due.days + ' 天后扣款（' + due.date + '）'; warn = true }
+      }
       return '<div class="list-item"><div class="ico">' + ic('pin') + '</div>' +
         '<div class="grow"><div>' + esc(name) + '</div>' +
-        '<div class="small muted">' + (FREQ[r.freq] || r.freq) + ' · 下次 ' + nextDue(r) + '</div></div>' +
+        '<div class="small muted"' + (warn ? ' style="color:var(--expense);font-weight:600"' : '') + '>' +
+        (FREQ_LABEL[r.freq] || r.freq) + dueText + '</div></div>' +
         '<div style="text-align:right"><div class="num" style="font-weight:700">¥' + F.yuan(F.toCents(r.amount)) + '</div>' +
-        '<div class="tiny muted">月均 ¥' + F.yuan(monthlyCost(r)) + '</div></div></div>'
+        '<div class="tiny muted">月均 ¥' + F.yuan(subMonthlyCost(r)) + '</div></div></div>'
     }).join('')
     openSheet(
       '<div class="sheet-head"><span class="sheet-title">固定支出 · 订阅</span><button id="subClose" class="btn sm line">关闭</button></div>' +
@@ -686,5 +718,9 @@
     openFxSettings: openFxSettings,
     openUiSettings: openUiSettings,
     openSubscriptionSheet: openSubscriptionSheet,
+    /* 供测试与外部面板复用的纯函数（不动账目数据结构） */
+    subMonthlyCost: subMonthlyCost,
+    subNextDue: subNextDue,
+    SUB_DUE_SOON: SUB_DUE_SOON,
   }
 })()
