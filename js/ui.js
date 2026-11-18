@@ -268,6 +268,170 @@ window.UI = (function () {
     sheetVersion++
   }
 
+  /* ---------- 手感细节（v1.19.6） ----------
+     三类反馈互相独立，都只回答用户的操作，不延后账目读写：
+     1) 触感：Android（含 PWA）走 navigator.vibrate；iOS Safari 不支持，调用被静默跳过。
+        MDN：该 API 需要用户激活，且不支持的设备调用无效果。开关存本机 ledger10_haptics，默认开。
+     2) tabPop / countUp：底部导航选中弹跳与首页大数字滚动，沿用 animateFeedback 的
+        取消与减少动态偏好机制；countUp 只改文本不参与布局。
+     3) 弹层下滑关闭：仅移动端底部弹层，且面板滚到顶、起点不在按钮/输入框上时才接管手势；
+        释放时位移或速度达标才关闭（有未保存改动仍走 mayLeaveEditor 确认），否则弹回原位。 */
+  function hapticsOn() {
+    try { return localStorage.getItem('ledger10_haptics') !== 'off' } catch (e) { return true }
+  }
+  function haptic(kind) {
+    if (!hapticsOn()) return
+    const nav = typeof navigator !== 'undefined' ? navigator : null
+    if (!nav || typeof nav.vibrate !== 'function') return
+    /* MDN：Vibration 需要用户激活。合成 click（自动化、无障碍工具）没有真实手势，
+       直接调会在 Chrome 控制台报错——没有瞬时激活就静默跳过；真实点按后 5 秒内都成立，
+       足以覆盖保存流程的异步写入。 */
+    const act = nav.userActivation
+    if (act && act.isActive !== true) return
+    const pattern = kind === 'success' ? 20 : kind === 'warn' ? [15, 70, 24] : 9
+    try { nav.vibrate(pattern) } catch (e) { /* 震动失败不影响操作 */ }
+  }
+
+  function tabPop(el) {
+    if (!el || !el.isConnected || !motionPreference || motionPreference.matches || typeof el.animate !== 'function') return
+    try {
+      cancelFeedback(el)
+      const animation = el.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(.9)', offset: .3 }, { transform: 'scale(1.14)', offset: .7 }, { transform: 'scale(1)' }],
+        { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'none' })
+      feedbackByElement.set(el, animation)
+      runningFeedback.add(animation)
+      const done = () => {
+        runningFeedback.delete(animation)
+        if (feedbackByElement.get(el) === animation) feedbackByElement.delete(el)
+      }
+      Promise.resolve(animation.finished).then(done, done)
+    } catch (e) { /* 不支持动效时保持原样 */ }
+  }
+
+  /* 数字滚动：rAF 不可用或系统减少动态时直接显示终值。 */
+  function countUp(el, from, to, format, duration) {
+    if (!el) return
+    const fmt = typeof format === 'function' ? format : c => String(c)
+    if (from === to) { el.textContent = fmt(to); return }
+    if ((motionPreference && motionPreference.matches) || typeof requestAnimationFrame !== 'function') {
+      el.textContent = fmt(to); return
+    }
+    const t0 = performance.now(), d = Math.max(120, Math.min(600, Number(duration) || 320))
+    const ease = t => 1 - Math.pow(1 - t, 3)
+    const step = now => {
+      const p = Math.max(0, Math.min(1, (now - t0) / d))
+      el.textContent = fmt(Math.round(from + (to - from) * ease(p)))
+      if (p < 1) requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  }
+
+  /* 保存成功标记：下一次明细页概览重绘时把大数字从旧值滚到新值，只播一次。 */
+  let savePulse = false
+  let homeBalance = { key: '', cents: null }
+  function markSavePulse() { savePulse = true }
+  function consumeSavePulse() { const v = savePulse; savePulse = false; return v }
+
+  /* 弹层下滑关闭（Framework7 等移动 Web 框架的标准能力，依据见 docs/手感细节对标-2026-11-18.md）。
+     桌面居中对话框、鼠标指针、控件上的起点和已滚动的内容都不接管，避免抢走滚动与点击。 */
+  let sheetDrag = null
+  function sheetDraggableLayout() {
+    return window.innerWidth < 640 ||
+      (typeof window.matchMedia === 'function' && window.matchMedia('(pointer:coarse)').matches)
+  }
+  function bindSheetDrag() {
+    const sheet = $('#sheet')
+    if (!sheet || sheet.dataset.dragBound === '1') return
+    sheet.dataset.dragBound = '1'
+    sheet.addEventListener('pointerdown', e => {
+      if (sheetDrag || !sheetOpen || editorSaving) return
+      if (!sheet.classList.contains('on')) return
+      if (e.pointerType === 'mouse') return
+      if (!sheetDraggableLayout()) return
+      const target = e.target
+      if (target && target.closest && target.closest('button, input, select, textarea, a, label, .keypad')) return
+      if (sheet.scrollTop > 0) return
+      sheetDrag = {
+        id: e.pointerId, x0: e.clientX, y0: e.clientY, claimed: false,
+        dy: 0, samples: [],
+        maxH: (typeof sheet.getBoundingClientRect === 'function' && sheet.getBoundingClientRect().height) || 0,
+      }
+      try { if (sheet.setPointerCapture) sheet.setPointerCapture(e.pointerId) } catch (err) { /* 忽略 */ }
+    })
+    sheet.addEventListener('pointermove', e => {
+      const d = sheetDrag
+      if (!d || (e.pointerId !== undefined && e.pointerId !== d.id)) return
+      if (!d.claimed) {
+        const dy = e.clientY - d.y0
+        if (dy < 6) return
+        if (Math.abs(e.clientX - d.x0) > Math.abs(dy)) { sheetDrag = null; return }
+        d.claimed = true
+        sheet.classList.add('dragging')
+      }
+      d.dy = Math.max(0, e.clientY - d.y0)
+      sheet.style.transform = 'translateY(' + d.dy + 'px)'
+      d.samples.push({ y: e.clientY, t: e.timeStamp || Date.now() })
+      if (d.samples.length > 6) d.samples.shift()
+    })
+    const release = e => {
+      const d = sheetDrag
+      if (!d) return
+      if (e && e.pointerId !== undefined && e.pointerId !== d.id) return
+      sheetDrag = null
+      if (!d.claimed) return
+      sheet.classList.remove('dragging')
+      const s = d.samples
+      const first = s.length ? s[0] : null
+      const last = s.length ? s[s.length - 1] : null
+      const vy = first && last && last.t > first.t ? (last.y - first.y) / (last.t - first.t) : 0
+      /* 交给 CSS 过渡：关闭则顺势滑走，弹回则回到原位；inline transform 先清掉。 */
+      sheet.style.transform = ''
+      const threshold = Math.max(120, d.maxH * 0.3)
+      if (d.dy > threshold || vy > 0.9) {
+        haptic('tap')
+        closeSheet()
+      }
+    }
+    sheet.addEventListener('pointerup', release)
+    sheet.addEventListener('pointercancel', () => {
+      const d = sheetDrag
+      sheetDrag = null
+      if (d && d.claimed) { sheet.classList.remove('dragging'); sheet.style.transform = '' }
+    })
+    /* 接管手势后阻止触屏滚动跟着手指走（passive:false 才能拦）。 */
+    sheet.addEventListener('touchmove', e => {
+      if (sheetDrag && sheetDrag.claimed && e.cancelable) e.preventDefault()
+    }, { passive: false })
+  }
+  /* 模块加载即绑定一次；无 DOM 的沙盒环境（部分单测）没有 #sheet，跳过即可。 */
+  try { bindSheetDrag() } catch (e) { /* 没有弹层容器就不支持下滑关闭 */ }
+
+  function openHapticSettings() {
+    const chipRow = (v, txt) => '<button type="button" class="chip" data-haptic-v="' + v + '" style="' +
+      (hapticsOn() === v ? 'background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600' : '') +
+      ';text-align:left;padding:13px 15px;font-size:15px;width:100%">' + txt + '</button>'
+    openSheet(
+      '<div class="sheet-head"><span class="sheet-title">触感反馈</span>' +
+      '<button type="button" class="btn sm line" id="hapticClose">关闭</button></div>' +
+      '<div class="row" style="margin-bottom:4px"><div class="grow small muted">' +
+      '按键、切换页面与记账成功时给一下轻微震动，让操作更有「按到了」的实感。' +
+      '只有支持震动的安卓设备生效，iPhone 上会自动跳过。</div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">' +
+      chipRow(true, '' + ic('check') + ' 开启') + chipRow(false, '' + ic('close') + ' 关闭') + '</div>'
+    )
+    const c = $('#hapticClose')
+    if (c) c.addEventListener('click', closeSheet)
+    $$('#sheet [data-haptic-v]').forEach(b => b.addEventListener('click', () => {
+      const v = b.getAttribute('data-haptic-v') === 'true'
+      try { localStorage.setItem('ledger10_haptics', v ? 'on' : 'off') } catch (e) { /* 忽略 */ }
+      closeSheet()
+      toast(v ? '触感反馈已开启' : '触感反馈已关闭')
+      if (v) haptic('success')
+      if (window.App && typeof window.App.renderTab === 'function') window.App.renderTab()
+    }))
+  }
+
   function lightbox(url) {
     const box = document.createElement('div')
     box.className = 'lightbox'
@@ -406,6 +570,15 @@ window.UI = (function () {
       /* 长金额降一档字号：百万级 + 桌面窄栏时会顶出卡片 */
       '<div class="balance num' + (balText.length > 10 ? ' long' : '') + (over ? ' over' : '') + '">' + balText + '</div>' +
       stripCells + '</div>'
+    /* 手感细节：保存成功后回到明细页，把大数字从旧值滚到新值（只播一次；口径与 balText 一致） */
+    const balCents = hasBudget ? (over ? Math.abs(remain) : Math.max(daily == null ? remain : daily, 0)) : balance
+    const balanceKey = st.scope + ':' + st.year + '-' + st.month + ':' + (hasBudget ? 'budget' : 'plain')
+    const balEl = box.querySelector('.balance')
+    if (balEl && consumeSavePulse() && homeBalance.key === balanceKey &&
+        homeBalance.cents != null && homeBalance.cents !== balCents) {
+      countUp(balEl, homeBalance.cents, balCents, shortMoney)
+    }
+    homeBalance = { key: balanceKey, cents: balCents }
     const strip = $('#ovStrip')
     if (strip) {
       /* 有预算时点开「未来 30 天」（v4 建议 3.2）；没预算时仍去统计页看结余构成 */
@@ -2486,6 +2659,7 @@ window.UI = (function () {
       grpFold('外观与提醒', [
         it('themeBtn', '' + ic('palette') + '', '外观 · 深色模式', '跟随系统 / 常亮 / 常暗', '', '›', 'themeModeLabel'),
         it('uiBtn', '' + ic('sliders') + '', '界面与配色', '字号大小 · 涨跌配色', '', '›', 'uiModeLabel'),
+        it('hapticBtn', '' + ic('zap') + '', '触感反馈', '按键与记账成功的轻微震动', '', '›', 'hapticLabel'),
         it('remindBtn', '' + ic('clock') + '', '每日记账提醒', '到点还没记账就提醒一次'),
         it('installBtn', '' + ic('smartphone') + '', '添加到主屏幕', '像 App 一样打开，离线也能记账', 'installSub'),
       ]) +
@@ -2569,6 +2743,10 @@ window.UI = (function () {
     $('#subBtn').addEventListener('click', openSubscriptionSheet)
     $('#remindBtn').addEventListener('click', openReminderSettings)
     $('#themeBtn').addEventListener('click', openThemeSettings)
+    const hapticBtn = $('#hapticBtn')
+    if (hapticBtn) hapticBtn.addEventListener('click', openHapticSettings)
+    const hpl = $('#hapticLabel')
+    if (hpl) hpl.innerHTML = hapticsOn() ? '' + ic('check') + ' 开' : '关'
     const tml = $('#themeModeLabel')
     if (tml) {
       const m = window.App.themeMode()
@@ -3956,6 +4134,7 @@ window.UI = (function () {
     if (kp) kp.addEventListener('click', e => {
       const btn = e.target.closest ? e.target.closest('button[data-k]') : null
       if (!btn) return
+      haptic('tap')
       const k = btn.getAttribute('data-k')
       /* 「完成」只收起键盘，不提交 —— 提交只有一个入口：#edSave */
       if (k === '完成') { setKp(false); $('#edSave').focus({ preventScroll: true }); return }
@@ -4002,6 +4181,7 @@ window.UI = (function () {
         if (!(await confirmSheet({ title: '删除账目', danger: true, okText: '删除', body: '删除后会进入回收站，可随时恢复，确定删除？' }))) return
         await S.deleteTransaction(editingId)
         closeSheet(true)
+        haptic('warn')
         toast('已移入回收站')
         window.App.refresh()
       })
@@ -4012,6 +4192,7 @@ window.UI = (function () {
   function edFail(msg, fieldId) {
     const err = $('#edErr')
     if (err) err.textContent = msg
+    haptic('warn')
     toast(msg)
     if (!fieldId) return
     const el = $('#' + fieldId)
@@ -4182,6 +4363,8 @@ window.UI = (function () {
       if (learnedFix) msg += ' · 已记住「' + learnedFix.kw + '」以后归到' + (S.categoryName(payload.category_id) || '该分类')
       toast(msg + (partialWarning ? ' · ' + partialWarning : ''),
         partialWarning || removalUncertain ? undefined : { icon: ic('check') })
+      if (!(partialWarning || removalUncertain)) haptic('success')
+      markSavePulse()
       window.App.refresh()
       if (removalUncertain) {
         openSheet('<div class="sheet-head"><b class="sheet-title">账目已保存</b><button class="btn sm line" id="attachmentPartialClose">关闭</button></div>' +
@@ -4373,6 +4556,7 @@ window.UI = (function () {
     openHelp, openInstallGuide, openAbout, openDemoData,
     openPrivacy, openTerms, needConsent, markConsent,
     openSyncHub, replayOnboard, exportCsv, noSpendStats,
+    haptic, hapticsOn, tabPop, countUp, openHapticSettings,
     collectOverlays, applyOverlays, backupImportWarning,
   }
 })()

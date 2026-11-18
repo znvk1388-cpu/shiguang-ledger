@@ -44,6 +44,7 @@ window.Overlay = (function () {
     'ledger10_rules_seeded',
     'ledger10_share_seen',     /* 共享快照去重指纹 */
     'ledger10_snapshot_entities',
+    'ledger10_haptics',        /* 触感反馈开关：丢了只会回到默认开启 */
     'ledger10_theme',
     'ledger10_ui',
     'ledger10_privacy',

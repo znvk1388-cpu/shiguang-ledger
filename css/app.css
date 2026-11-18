@@ -396,6 +396,14 @@ input, select, textarea { outline: none; }
   max-height: 92vh; overflow-y: auto; box-shadow: 0 -8px 40px rgba(18,26,46,.12);
 }
 .sheet.on { transform: translateY(0); transition-duration: var(--motion-sheet); }
+/* 下滑关闭把手：移动端底部弹层顶部的小横条，粘性吸顶；桌面居中对话框不显示 */
+.sheet::before {
+  content: ''; position: sticky; top: 0; z-index: 1;
+  display: block; width: 40px; height: 4px; border-radius: 2px;
+  margin: -10px auto 8px; background: var(--line); pointer-events: none;
+}
+.sheet.dragging { transition: none; }
+@media (min-width: 640px) { .sheet::before { display: none; } }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .sheet-title { font-size: var(--fs-title); font-weight: 700; }
 
@@ -539,16 +547,16 @@ body.privacy .cal-cell .d.num::after { content: none; }
   background: var(--bg); color: var(--text);
   font-size: var(--fs-section); font-weight: 600; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: background .12s ease;
+  transition: background .12s ease, transform var(--motion-base) var(--ease-out);
 }
-.keypad button:active { background: var(--brand-soft); }
+.keypad button:active { background: var(--brand-soft); transform: scale(.955); transition-duration: var(--motion-press); }
 .keypad button.op { background: var(--card); color: var(--brand); border: 1px solid var(--line); }
 .keypad button.op:active { background: var(--brand-soft); }
 .keypad button.fn { font-size: var(--fs-title); color: var(--sub); font-weight: 500; }
 .keypad button.wide { grid-column: span 2; }
 /* 键盘右下角的「保存」：单手输完金额即可落账，不必再够到底部按钮 */
 .keypad button.ok { background: var(--brand-soft); color: var(--brand-ink); border: 1px solid var(--line); font-size: var(--fs-title); }
-.keypad button.ok:active { filter: brightness(.94); }
+.keypad button.ok:active { filter: brightness(.94); transform: scale(.97); }
 
 /* ---------- 分类宫格 ----------
    调研共识：主流记账 App 用宫格（4~5 列）选分类，而不是横向标签流。
@@ -559,9 +567,9 @@ body.privacy .cal-cell .d.num::after { content: none; }
   border: 1px solid var(--line); background: var(--card); border-radius: var(--r-md);
   padding: 9px 4px 7px; cursor: pointer; min-width: 0; position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
-  transition: background .12s ease, border-color .12s ease;
+  transition: background .12s ease, border-color .12s ease, transform var(--motion-base) var(--ease-out);
 }
-.cat-cell:active { background: var(--brand-soft); }
+.cat-cell:active { background: var(--brand-soft); transform: scale(.94); transition-duration: var(--motion-press); }
 .cat-cell .ci { font-size: var(--fs-section); line-height: 1; }
 .cat-cell .cn {
   font-size: var(--fs-caption); color: var(--sub); max-width: 100%;

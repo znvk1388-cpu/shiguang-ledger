@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.19.5'
+  const VERSION = '1.19.6'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -706,6 +706,10 @@ window.App = (function () {
     if (changed) pendingTabTop = tab
     state.tab = tab
     $$('#tabbar .tab').forEach(b => b.classList.toggle('on', b.getAttribute('data-tab') === tab))
+    if (changed && window.UI) {
+      if (typeof UI.haptic === 'function') UI.haptic('tap')
+      if (typeof UI.tabPop === 'function') { const tabIc = $('#tabbar .tab.on .ic'); if (tabIc) UI.tabPop(tabIc) }
+    }
     const rendered = refresh()
     if (pendingTabTop === tab) Promise.resolve(rendered).then(() => {
       if (version !== tabMotionVersion || state.tab !== tab) return
