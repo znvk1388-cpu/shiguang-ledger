@@ -432,6 +432,75 @@ window.UI = (function () {
     }))
   }
 
+  /* ---------- 拾光 Pro（v1.20.0） ----------
+     买断制激活码（Ed25519 签名，见 js/license.js）。Pro 首发只门控 AI 智能记账
+     ——它有真实的模型调用成本；其余功能保持免费，后续权益经版本更新加入。 */
+  function proOk() { return !!(window.License && window.License.isPro()) }
+
+  function openProSheet(from) {
+    var st = window.License ? window.License.status() : { pro: false }
+    var siteUrl = (window.APP_INFO && window.APP_INFO.siteUrl) || ''
+    var head = '<div class="sheet-head"><span class="sheet-title">拾光 Pro</span>' +
+      '<button type="button" class="btn sm line" id="proClose">关闭</button></div>'
+    if (st.pro) {
+      openSheet(head +
+        '<div class="card"><div class="kv"><span>状态</span><b>' + ic('check') + ' 已激活</b></div>' +
+        (st.activatedAt ? '<div class="kv"><span>激活时间</span><b>' + esc(st.activatedAt.slice(0, 10)) + '</b></div>' : '') +
+        (st.issued ? '<div class="kv"><span>签发日期</span><b>' + esc(st.issued) + '</b></div>' : '') +
+        (st.serial != null ? '<div class="kv"><span>授权序号</span><b class="num">#' + st.serial + '</b></div>' : '') +
+        '</div>' +
+        '<div class="tiny muted" style="margin-top:8px">激活码保存在本机，随备份一起迁移。Pro 权益随版本更新陆续加入，不再收费。</div>' +
+        '<button type="button" class="btn danger block" id="proDeactivate" style="margin-top:12px">移除本机激活</button>')
+      $('#proClose').addEventListener('click', closeSheet)
+      $('#proDeactivate').addEventListener('click', () => {
+        window.License.deactivate()
+        closeSheet()
+        toast('已移除本机激活')
+        if (window.App && typeof window.App.renderTab === 'function') window.App.renderTab()
+      })
+      return
+    }
+    openSheet(head +
+      (from === 'ai' ? '<div class="card callout callout--warn"><div class="callout-title">AI 智能记账是拾光 Pro 功能</div>' +
+        '<div class="small muted">激活后即可拍照小票识别、一句话自动建账。</div></div>' : '') +
+      '<div class="card"><div class="between" style="margin-bottom:6px"><b>Pro 权益</b><span class="small muted">买断制 · 不订阅</span></div>' +
+      '<div class="kv"><span>AI 智能记账</span><b>拍小票 / 一句话自动建账</b></div>' +
+      '<div class="kv"><span>后续权益</span><b class="num">随更新免费加入</b></div>' +
+      '<div class="kv"><span>价格</span><b>¥58 买断 · 本机永久有效</b></div>' +
+      '</div>' +
+      '<div class="card"><div class="between" style="margin-bottom:8px"><b>已有激活码</b></div>' +
+      '<input id="proCodeInput" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="粘贴 SJ1. 开头的激活码" aria-label="激活码">' +
+      '<button type="button" class="btn block" id="proActivateBtn" style="margin-top:10px">激活</button>' +
+      '<div id="proErr" class="small" style="color:var(--expense);margin-top:8px"></div></div>' +
+      (siteUrl
+        ? '<div class="card"><div class="between"><span class="small muted">还没有激活码</span>' +
+          '<button type="button" class="btn sm" id="proBuy">去购买</button></div>' +
+          '<div class="tiny muted" style="margin-top:6px">官网购买后自动发货，回来粘贴即用。</div></div>'
+        : '<div class="tiny muted" style="margin-top:8px">激活码购买渠道见官网。</div>'))
+    $('#proClose').addEventListener('click', closeSheet)
+    var buy = $('#proBuy')
+    if (buy) buy.addEventListener('click', () => { try { window.open(siteUrl, '_blank', 'noopener') } catch (e) { /* 忽略 */ } })
+    $('#proActivateBtn').addEventListener('click', async () => {
+      var btn = $('#proActivateBtn'), err = $('#proErr'), val = $('#proCodeInput').value
+      btn.disabled = true
+      try {
+        var res = await window.License.activate(val)
+        if (res.ok) {
+          haptic('success')
+          closeSheet()
+          toast('拾光 Pro 已激活', { icon: ic('check') })
+          if (window.App && typeof window.App.renderTab === 'function') window.App.renderTab()
+          return
+        }
+        haptic('warn')
+        err.textContent = res.reason === 'signature' ? '激活码无效：签名校验未通过，请确认完整复制（含 SJ1. 开头）'
+          : res.reason === 'unsupported' ? '当前浏览器不支持激活所需的加密能力，请更新系统后重试'
+          : res.reason === 'plan' ? '激活码类型不支持，请确认购买的是拾光 Pro'
+          : '激活码格式无效，请核对是否为 SJ1. 开头的完整激活码'
+      } finally { btn.disabled = false }
+    })
+  }
+
   function lightbox(url) {
     const box = document.createElement('div')
     box.className = 'lightbox'
@@ -2621,6 +2690,7 @@ window.UI = (function () {
       '<button class="btn" id="budgetSave" style="flex:none">保存</button></div>' +
       '<div class="small muted" style="margin-top:6px">留空并保存可清除预算</div></div></div>' +
       grp('记账设置', [
+        it('proBtn', '' + ic('trophy') + '', '拾光 Pro', 'AI 智能记账 · 一次购买本机有效', '', '›', 'proLabel'),
         it('smartRulesBtn', '' + ic('wand') + '', '记账规则', '备注命中关键词自动归类 · 打标签'),
         it('aiBtn', '' + ic('sparkles') + '', 'AI 智能记账', '说一句话 / 拍张小票，自动填好单子'),
         it('tplBtn', '' + ic('star') + '', '记账模板', '常用的一笔快速套用'),
@@ -2747,6 +2817,10 @@ window.UI = (function () {
     if (hapticBtn) hapticBtn.addEventListener('click', openHapticSettings)
     const hpl = $('#hapticLabel')
     if (hpl) hpl.innerHTML = hapticsOn() ? '' + ic('check') + ' 开' : '关'
+    const proBtn = $('#proBtn')
+    if (proBtn) proBtn.addEventListener('click', openProSheet)
+    const prl = $('#proLabel')
+    if (prl) prl.innerHTML = proOk() ? '' + ic('check') + ' 已激活' : '未激活'
     const tml = $('#themeModeLabel')
     if (tml) {
       const m = window.App.themeMode()
@@ -2760,7 +2834,10 @@ window.UI = (function () {
     const sr = $('#smartRulesBtn')
     if (sr) sr.addEventListener('click', () => Lazy.need('smart').then(m => m && m.openRuleManager()))
     const ai = $('#aiBtn')
-    if (ai) ai.addEventListener('click', () => Lazy.need('smart').then(m => m && m.openAiSheet()))
+    if (ai) ai.addEventListener('click', () => {
+      if (!proOk()) { openProSheet('ai'); return }
+      Lazy.need('smart').then(m => m && m.openAiSheet())
+    })
     const dbt2 = $('#debtBtn2')
     if (dbt2) dbt2.addEventListener('click', () => { Lazy.need('wealth').then(m => m && m.openDebtSheet()) })
     const cc2 = $('#cardBtn2')
@@ -4017,6 +4094,7 @@ window.UI = (function () {
     const aiBtn = $('#edAiBtn')
     if (aiBtn) aiBtn.addEventListener('click', () => {
       const version = sheetVersion
+      if (!proOk()) { openProSheet('ai'); return }
       Lazy.need('smart').then(m => { if (m && version === sheetVersion && $('#edSave') && mayLeaveEditor()) m.openAiSheet() })
     })
     const ruleBtn = $('#edRuleBtn')

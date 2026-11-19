@@ -62,5 +62,6 @@ window.APP_INFO = {
   appName: '拾光记账',
   operator: '拾光记账开发团队',
   contact: 'contact@shiguangji.com',
+  siteUrl: '',     /* 官网地址（购买激活码入口用）；上线后填，如 'https://shiguangji.com' */
   version: '',     /* 留空则用 js/app.js 里的 VERSION */
 }

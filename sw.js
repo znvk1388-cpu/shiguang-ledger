@@ -2,7 +2,7 @@
 /* CACHE 由 `npm run stamp`（tools/sw-version.mjs）按全部静态资源的哈希自动写入。
    不要手改这一行：tests/sw-version.test.cjs 会校验它与当前文件内容一致，
    忘记重新盖章会直接测试失败 —— 手改版本号漏改导致线上跑旧资源的老问题就这么封住了。 */
-const CACHE = 'ledger10-a4b5a6d5e820'
+const CACHE = 'ledger10-b35ccd015bb1'
 
 /* 首屏必需：index.html 里 <script defer> 引的那些 + 样式 + 图标。
    串行安装时按这个顺序先装，中途断网也能离线启动。 */
@@ -12,7 +12,7 @@ const CORE_SHELL = [
   './manifest.json',
   './css/app.css', './css/product.css', './assets/icons.svg', './icon-192.png', './icon-512.png',
   './js/vendor/workbuddy-cloud-sdk.js',
-  './js/config.js', './js/env.js', './js/cloud.js', './js/format.js', './js/idb.js',
+  './js/config.js', './js/license.js', './js/env.js', './js/cloud.js', './js/format.js', './js/idb.js',
   './js/overlay.js', './js/store.js',
   './js/guest-store.js', './js/db.js', './js/sync.js', './js/lazy.js', './js/product.js',
   './js/ui.js', './js/app.js',
