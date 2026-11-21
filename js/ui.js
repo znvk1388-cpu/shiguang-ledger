@@ -438,6 +438,8 @@ window.UI = (function () {
   function proOk() { return !!(window.License && window.License.isPro()) }
 
   function openProSheet(from) {
+    var proSheetFrom = from || ''
+    var autoTried = false
     var st = window.License ? window.License.status() : { pro: false }
     var siteUrl = (window.APP_INFO && window.APP_INFO.siteUrl) || ''
     var head = '<div class="sheet-head"><span class="sheet-title">拾光 Pro</span>' +
@@ -490,6 +492,8 @@ window.UI = (function () {
           closeSheet()
           toast('拾光 Pro 已激活', { icon: ic('check') })
           if (window.App && typeof window.App.renderTab === 'function') window.App.renderTab()
+          /* 从 AI 入口被拦来的用户，激活后直接送进 AI 面板，不打断原有意图 */
+          if (proSheetFrom === 'ai') Lazy.need('smart').then(m => { if (m) m.openAiSheet() })
           return
         }
         haptic('warn')
@@ -498,6 +502,16 @@ window.UI = (function () {
           : res.reason === 'plan' ? '激活码类型不支持，请确认购买的是拾光 Pro'
           : '激活码格式无效，请核对是否为 SJ1. 开头的完整激活码'
       } finally { btn.disabled = false }
+    })
+    /* 粘贴整段激活码后自动尝试激活，省一次点击；手动点击仍然可用 */
+    var codeInput = $('#proCodeInput')
+    if (codeInput) codeInput.addEventListener('input', () => {
+      var v = String(codeInput.value || '').trim()
+      if (!v) { autoTried = false; return }
+      if (!autoTried && /^SJ1\./.test(v) && v.length >= 70) {
+        autoTried = true
+        $('#proActivateBtn').click()
+      }
     })
   }
 

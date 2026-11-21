@@ -139,3 +139,21 @@ test('with Pro active the AI sheet opens directly through the lazy module', asyn
     assert.ok(!(title && /拾光 Pro/.test(title.textContent)), '已激活时不再弹 Pro 推介')
   } finally { h.close() }
 })
+
+test('pasting a full code auto-activates and returns the user straight into the AI sheet', async () => {
+  const h = setup()
+  try {
+    await h.w.UI.renderMe(h.state)
+    h.$('#aiBtn').click()
+    assert.match(h.$('#sheet .sheet-title').textContent, /拾光 Pro/, '未激活先弹 Pro 面板')
+    /* 模拟粘贴：直接填入整段码并触发 input 事件 */
+    const input = h.$('#proCodeInput')
+    input.value = makeCode(h.keyPair, { serial: 88 })
+    input.dispatchEvent(new h.w.Event('input', { bubbles: true }))
+    await new Promise(r => setTimeout(r, 150))
+    assert.equal(h.w.License.isPro(), true, '粘贴后自动激活')
+    await turn(); await turn()
+    assert.deepEqual(h.smartCalls.filter(m => m === 'smart'), ['smart'], '激活后直达 AI 面板，意图不中断')
+    assert.ok(h.vibes.includes(20), '激活成功触感')
+  } finally { h.close() }
+})

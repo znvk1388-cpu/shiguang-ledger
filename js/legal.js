@@ -102,6 +102,7 @@
       '<div class="kv"><span>账号隔离</span><b>按账号独立存储</b></div>' +
       '<div class="kv"><span>图片处理</span><b>压缩后上传，仅本人可读</b></div>' +
       '<div class="kv"><span>AI 能力</span><b>由云端模型服务提供</b></div>' +
+      '<div class="kv"><span>拾光 Pro</span><b>' + (window.License && window.License.isPro() ? ic('check') + ' 已激活' : '未激活 · 核心功能免费') + '</b></div>' +
       '</div>' +
       '<div class="card"><div class="help-sec"><h4>数据与隐私</h4>' +
       '<p class="muted">账目与凭证只属于你本人，服务端按账号隔离；图片通过临时签名链接读取，链接约 1 小时后失效。' +
@@ -112,6 +113,7 @@
       '<div class="row" style="gap:8px;margin-top:10px">' +
       '<button class="btn line grow" id="abPrivacy">用户隐私保护指引</button>' +
       '<button class="btn line grow" id="abTerms">用户协议</button>' +
+      (String(APP_INFO.siteUrl || '').trim() ? '<button class="btn line grow" id="abSite">官网 · 购买</button>' : '') +
       '</div></div>' +
       '<p class="hint">© ' + new Date().getFullYear() + ' 拾光记账 · 记录每一段值得纪念的时光</p>'
     )
@@ -121,6 +123,8 @@
     if (p) p.addEventListener('click', openPrivacy)
     const t = $('#abTerms')
     if (t) t.addEventListener('click', openTerms)
+    const siteBtn = $('#abSite')
+    if (siteBtn) siteBtn.addEventListener('click', () => { try { window.open(String(APP_INFO.siteUrl), '_blank', 'noopener') } catch (e) { /* 忽略 */ } })
     /* 当前访问地址由懒加载模块渲染（避免占首屏体积） */
     Lazy.need('vault').then(m => { if (m && m.addrHtml) m.addrHtml('#abAddr') })
   }
@@ -146,7 +150,7 @@
       '</div>'
   }
 
-  const UPDATED = '2026 年 10 月 28 日'
+  const UPDATED = '2026 年 11 月 21 日'
 
   function privacyHtml() {
     const isGuest = window.DB.mode === 'guest'
@@ -165,6 +169,7 @@
       '<tr><td>记账数据（金额、收支方向、分类、账户、备注、标签、时间）</td><td>你录入或导入账单时</td><td>实现记账、统计、预算等核心功能</td></tr>' +
       '<tr><td>图片凭证</td><td>你主动拍照或上传小票时</td><td>作为账目附件保存与查看</td></tr>' +
       '<tr><td>本地偏好设置（主题、字号、隐私模式、应用锁 PIN、记账规则）</td><td>你调整设置时</td><td>仅保存在本机，用于还原你的使用偏好，<b>不上传</b></td></tr>' +
+      '<tr><td>拾光 Pro 激活码</td><td>你在应用内输入激活码时</td><td>仅保存在本机用于识别 Pro 授权，<b>不上传、不联网验证</b></td></tr>' +
       '</table>' +
       '<p class="meta">我们不收集你的通讯录、位置、相册全量内容、通话记录与短信。相机与相册权限只在你主动上传凭证时按次申请。</p>' +
 
@@ -261,19 +266,28 @@
       '<h4>五、知识产权</h4>' +
       '<p>本应用的界面设计、程序代码及相关素材的权利归开发者所有。你录入的账目数据归你本人所有。</p>' +
 
-      '<h4>六、服务变更与终止</h4>' +
+      '<h4>六、付费与激活（拾光 Pro）</h4>' +
+      '<ul>' +
+      '<li>核心记账功能永久免费；「拾光 Pro」为一次性买断的进阶授权（当前权益：AI 智能记账），通过激活码开启，不订阅、不自动扣费。</li>' +
+      '<li>激活码在本机验证生效，供你本人使用；请勿转售、共享或公开发布，经核实被大规模共享的激活码可能被作废。</li>' +
+      '<li>虚拟商品特性：激活码一经核销，不支持无理由退货；因激活码本身无法激活的，凭购买凭证联系 ' + esc(CONTACT_TEXT) + ' 补发。</li>' +
+      '<li>激活码保存在本机，随应用内备份一起迁移；清除本机数据前请先备份或妥善保存激活码。</li>' +
+      '<li>Pro 权益可能随版本更新增加，不额外收费；若某个权益依赖的第三方服务发生变化，我们会优先恢复或以其他权益补偿。</li>' +
+      '</ul>' +
+
+      '<h4>七、服务变更与终止</h4>' +
       '<p>我们可能因升级、维护或不可抗力而调整、暂停部分服务，并尽可能提前告知。' +
       '若你违反本协议，我们有权暂停或终止向你提供服务。</p>' +
 
-      '<h4>七、免责声明</h4>' +
+      '<h4>八、免责声明</h4>' +
       '<p>因不可抗力、网络故障、设备故障、第三方服务中断等非我方原因导致的服务中断或数据延迟，' +
       '我们将尽力协助恢复，但不承担由此产生的间接损失。请务必定期使用「导出加密文件到本机」' +
       '或「JSON 备份」自行留存重要数据。</p>' +
 
-      '<h4>八、适用法律与争议解决</h4>' +
+      '<h4>九、适用法律与争议解决</h4>' +
       '<p>本协议适用中华人民共和国大陆地区法律。如发生争议，双方应友好协商解决；协商不成的，可向有管辖权的人民法院提起诉讼。</p>' +
 
-      '<h4>九、联系方式</h4>' +
+      '<h4>十、联系方式</h4>' +
       '<p>' + esc(CONTACT_TEXT) + '</p>' +
       '</div>'
   }

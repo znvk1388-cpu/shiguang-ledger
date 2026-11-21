@@ -80,12 +80,41 @@ async function main() {
     console.log('已保存 shots/' + name)
   }
 
+  /* --demo：进入游客后自动载入示例数据，用于商品详情/官网截图（空账本不好看） */
+  const DEMO = process.argv.includes('--demo')
+
   /* 统一用浅色主题截图：默认跟随系统，CI/服务器上可能是深色 */
-  await ev(`(() => { try { localStorage.setItem('ledger10_theme','light'); localStorage.setItem('ledger10_privacy_ok','1') } catch(e){}; location.href='${URL_BASE}'; return 1 })()`)
-  await sleep(2000)
+  await ev(`(() => { try { localStorage.setItem('ledger10_theme','light'); localStorage.setItem('ledger10_privacy_ok','1') } catch(e){}; location.reload(); return 1 })()`)
+  await sleep(2200)
   await shot('01-auth.png')
   await ev(`(() => { const c=document.querySelector('#consentChk'); if(c) c.checked=true; const b=document.querySelector('#guestBtn'); if(b) b.click(); return 1 })()`)
-  await sleep(3400)
+  await sleep(6500)
+  if (DEMO) {
+    /* 商品图需要「有数据的界面」；示例预览弹层不写账，这里直接种一批虚构演示账目（仅当前测试档案） */
+    await ev(`(async () => {
+      const rows = [
+        ['income','工资',8500,'2026-11-01'],['expense','房租',2300,'2026-11-01'],['expense','话费',59,'2026-11-02'],
+        ['expense','午餐',25,'2026-11-03'],['expense','地铁',6,'2026-11-03'],['expense','外卖',32.5,'2026-11-05'],
+        ['expense','奶茶',18,'2026-11-06'],['expense','日用',46.8,'2026-11-08'],['expense','电影演出',45,'2026-11-09'],
+        ['expense','打车',23,'2026-11-10'],['expense','晚餐',58.4,'2026-11-12'],['expense','网课',99,'2026-11-14'],
+        ['expense','日用',27.9,'2026-11-15'],['expense','地铁',12,'2026-11-16'],['expense','外卖',35,'2026-11-18'],
+        ['income','兼职外快',300,'2026-11-19'],['expense','水电燃气',138.6,'2026-11-20']]
+      const cat = n => (window.DB.state.categories.find(c => c.name === n) || {}).id
+      for (const [type, note, amount, at] of rows) {
+        const isIncome = type === 'income'
+        await window.DB.addTransaction({
+          txn_type: type, amount: amount, occurred_at: at,
+          account_id: (window.DB.accounts()[0] || {}).id || 1,
+          category_id: cat(isIncome ? (note === '工资' ? '工资' : '兼职') : note) || 1,
+          note: note,
+        })
+      }
+      try { await window.DB.setBudget('2026-11', null, 3500) } catch (e) {}
+      await window.App.refresh()
+      return window.DB.listTransactions ? 'seeded' : 'ok'
+    })()`)
+    await sleep(3000)
+  }
   await shot('02-home.png')
   await ev(`(() => { const b=document.querySelector('[data-tab="add"]'); if(b) b.click(); return 1 })()`)
   await sleep(1600)
