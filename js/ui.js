@@ -3556,7 +3556,8 @@ window.UI = (function () {
     draft.aiReview = !editing && !!(preset && preset.aiReview === true)
     draft.aiCurrency = draft.aiReview && typeof preset.aiCurrency === 'string' && /^[A-Z]{3}$/.test(preset.aiCurrency) ? preset.aiCurrency : null
     editorMoreOpen = false
-    editorKpOpen = false
+    /* preset.keyboard：从首页快捷分类等入口进来时直接展开数字键盘，省一次点击 */
+    editorKpOpen = !!(preset && preset.keyboard === true)
     editorFocusPending = true
     draft.type = forceType || (txn ? txn.txn_type : 'expense')
     draft.amount = txn ? String(txn.amount) : ''

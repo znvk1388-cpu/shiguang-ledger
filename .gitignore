@@ -2,4 +2,6 @@ node_modules/
 coverage/
 *.log
 dist/
-shots/
+# 根目录 shots/ 是测试截图产物；site/shots/ 是官网商品图，需要入库
+/shots/
+/site/shots/.profile/

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f6fa">
+<title>拾光记账 · 数据留在自己手里的记账 App</title>
+<meta name="description" content="拾光记账：纯本机存储、无广告的记账 App。AI 智能记账、年度热力图、报表中心、多账本、周期记账、预算与共享账本。">
+<style>
+  :root { --brand:#2f6bef; --brand-2:#5b8cff; --text:#1b1f27; --sub:#6b7488; --line:#e4e9f3; --bg:#f5f6fa; --card:#ffffff; --r:14px; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei"; background:var(--bg); color:var(--text); line-height:1.6; }
+  .wrap { max-width:720px; margin:0 auto; padding:0 20px; }
+  header { padding:18px 0; }
+  header .wrap { display:flex; align-items:center; justify-content:space-between; }
+  .logo { font-weight:700; font-size:18px; }
+  .logo span { color:var(--brand); }
+  header a { color:var(--sub); text-decoration:none; font-size:14px; margin-left:16px; }
+  header a:hover { color:var(--brand); }
+  .hero { padding:56px 0 40px; text-align:center; }
+  .hero h1 { font-size:34px; line-height:1.25; letter-spacing:.5px; }
+  .hero h1 em { font-style:normal; color:var(--brand); }
+  .hero p.sub { color:var(--sub); margin-top:12px; font-size:16px; }
+  .hero .cta { margin-top:28px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:13px 26px; border-radius:12px; font-size:15px; font-weight:600; text-decoration:none; cursor:pointer; border:none; }
+  .btn.primary { background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; box-shadow:0 8px 18px rgba(47,107,239,.35); }
+  .btn.ghost { background:var(--card); color:var(--brand); border:1px solid var(--line); }
+  .btn.disabled { opacity:.55; pointer-events:none; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; padding:8px 0 32px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:18px; }
+  .card .ic { font-size:26px; }
+  .card h3 { font-size:15px; margin-top:8px; }
+  .card p { font-size:13px; color:var(--sub); margin-top:4px; }
+  section h2 { font-size:22px; margin:26px 0 6px; }
+  section .lead { color:var(--sub); font-size:14px; margin-bottom:16px; }
+  .pro-box { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:22px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+  .pro-box .price { font-size:34px; font-weight:700; color:var(--brand); }
+  .pro-box .price small { font-size:14px; color:var(--sub); font-weight:400; }
+  .pro-box ul { list-style:none; font-size:14px; color:var(--text); flex:1; min-width:220px; }
+  .pro-box li::before { content:"✓ "; color:var(--brand); font-weight:700; }
+  .faq { padding-bottom:12px; }
+  .faq .item { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:14px 18px; margin-bottom:10px; }
+  .faq .q { font-weight:600; font-size:14px; }
+  .faq .a { font-size:13px; color:var(--sub); margin-top:4px; }
+  footer { padding:28px 0 40px; text-align:center; color:var(--sub); font-size:12px; }
+  footer a { color:var(--sub); margin:0 6px; }
+  .beian { margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="logo">拾光<span>记账</span></div>
+    <nav><a href="#download">下载</a><a href="#pro">拾光 Pro</a><a href="privacy.html">隐私</a><a href="agreement.html">协议</a></nav>
+  </div>
+</header>
+
+<div class="hero wrap">
+  <h1>记账这件事，<em>数据留在自己手里</em></h1>
+  <p class="sub">纯本机存储 · 无广告 · 无跟踪。装上就用，断网也能记。</p>
+  <div class="cta">
+    <!-- 上线前替换：APK 直链 -->
+    <a class="btn primary disabled" id="apkBtn" href="#" aria-disabled="true">下载安卓 APK（即将上线）</a>
+    <!-- 上线前替换：指向 PWA 部署地址 -->
+    <a class="btn ghost" id="webBtn" href="#">网页版直接用</a>
+  </div>
+  <p class="sub" style="font-size:12px;margin-top:10px">支持添加到主屏幕，像原生 App 一样打开 · iOS 用户先用网页版</p>
+</div>
+
+<div class="wrap" id="shots">
+  <section>
+    <h2>App 实拍</h2>
+    <p class="lead">真实界面截图，浅色主题。</p>
+    <div style="display:flex;gap:12px;overflow-x:auto;padding:4px 0 24px">
+      <img src="shots/02-home.png" alt="首页明细" style="width:46%;min-width:210px;border-radius:16px;border:1px solid var(--line)">
+      <img src="shots/04-stats.png" alt="统计图表" style="width:46%;min-width:210px;border-radius:16px;border:1px solid var(--line)">
+      <img src="shots/03-editor.png" alt="记账面板" style="width:46%;min-width:210px;border-radius:16px;border:1px solid var(--line)">
+    </div>
+  </section>
+</div>
+
+<div class="wrap" id="download">
+  <section>
+    <h2>它有什么</h2>
+    <p class="lead">一个把「记账」本身做扎实的工具，没有花哨的运营位。</p>
+    <div class="grid">
+      <div class="card"><div class="ic">🔒</div><h3>数据纯本机</h3><p>账目存在自己设备里，不上传、不分析；想跨设备可选加密同步。</p></div>
+      <div class="card"><div class="ic">🚫</div><h3>无广告</h3><p>没有开屏广告、没有运营弹窗，打开就是你的账。</p></div>
+      <div class="card"><div class="ic">✨</div><h3>AI 智能记账</h3><p>拍张小票或说一句话，金额、分类、时间自动填好（拾光 Pro）。</p></div>
+      <div class="card"><div class="ic">📊</div><h3>报表与热力图</h3><p>年度热力图、分类趋势、财年报告、财务健康度，报表可导出海报。</p></div>
+      <div class="card"><div class="ic">📚</div><h3>多账本与共享</h3><p>多本账分开记；共享账本用加密快照同步，家人合记不泄漏明细。</p></div>
+      <div class="card"><div class="ic">🔁</div><h3>周期与预算</h3><p>房租话费到期自动补记，月/分类预算结转，订阅续费日提醒。</p></div>
+    </div>
+  </section>
+</div>
+
+<div class="wrap" id="pro">
+  <section>
+    <h2>拾光 Pro</h2>
+    <p class="lead">核心记账功能永久免费。Pro 是给重度用户的一次性升级，不订阅。</p>
+    <div class="pro-box">
+      <div class="price">¥58<small> 买断 · 本机永久有效</small></div>
+      <ul>
+        <li>AI 智能记账（拍小票 / 一句话建账）</li>
+        <li>后续新权益随版本更新免费加入</li>
+        <li>激活码本机验证，不联网不绑定账号</li>
+      </ul>
+      <!-- 上线前替换：购买链接（淘宝/爱发电自动发货） -->
+      <a class="btn primary disabled" id="buyBtn" href="#" aria-disabled="true">购买激活码（即将开售）</a>
+    </div>
+  </section>
+
+  <section class="faq" style="padding-top:12px">
+    <h2>常见问题</h2>
+    <div class="item"><div class="q">我的账目会上传吗？</div><div class="a">不会。记账数据只存本机；只有你主动开启云同步/加密备份时才会加密上传，且密文只有你能解开。</div></div>
+    <div class="item"><div class="q">换手机怎么办？</div><div class="a">用「JSON 备份 / 恢复」或加密备份导出文件，在新设备一键导入，激活码也随备份迁移。</div></div>
+    <div class="item"><div class="q">激活码怎么用？</div><div class="a">购买后复制 SJ1. 开头的激活码 → 打开 App「我的 · 拾光 Pro」→ 粘贴并点激活，立即生效。</div></div>
+    <div class="item"><div class="q">iPhone 能用吗？</div><div class="a">可以，用 Safari 打开网页版并「添加到主屏幕」，体验接近原生；独立 iPhone 版在计划中。</div></div>
+  </section>
+</div>
+
+<footer>
+  <div>
+    <a href="agreement.html">用户协议</a>·<a href="privacy.html">隐私政策</a>·<a href="mailto:contact@shiguangji.com">联系我们</a>
+  </div>
+  <div class="beian">© 2026 拾光记账开发团队 <!-- 上线前替换：ICP备案号占位 --> · 数据在你手里</div>
+</footer>
+</body>
+</html>

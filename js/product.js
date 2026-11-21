@@ -44,7 +44,7 @@
         '<button id="sgMoreEntry" aria-label="更多分类"><span class="qb-ic qb-ic-more">' + icon('plus') + '</span><span class="qb-lb">更多</span></button>' +
         '</div></section>'
       target.querySelectorAll('[data-quick-category]').forEach(b => {
-        b.onclick = () => U.openEditor(null, 'expense', { categoryId: Number(b.dataset.quickCategory) })
+        b.onclick = () => U.openEditor(null, 'expense', { categoryId: Number(b.dataset.quickCategory), keyboard: true })
       })
       const more = document.getElementById('sgMoreEntry')
       if (more) more.onclick = () => U.openEditor(null)
@@ -81,7 +81,7 @@
         '<span class="qb-ic">' + F.escapeHtml(c.icon || '＋') + '</span><span class="qb-lb">' + F.escapeHtml(c.name) + '</span></button>').join('') +
       '<button id="sgMoreEntry" aria-label="更多分类"><span class="qb-ic qb-ic-more">' + icon('plus') + '</span><span class="qb-lb">更多</span></button>' +
       '</div></section>'
-    target.querySelectorAll('[data-quick-category]').forEach(b => b.onclick = () => U.openEditor(null, 'expense', { categoryId: Number(b.dataset.quickCategory) }))
+    target.querySelectorAll('[data-quick-category]').forEach(b => b.onclick = () => U.openEditor(null, 'expense', { categoryId: Number(b.dataset.quickCategory), keyboard: true }))
     document.getElementById('sgMoreEntry').onclick = () => U.openEditor(null)
     document.getElementById('sgToday').onclick = () => {
       Object.assign(st.filters, { type: '', accountId: null, categoryId: null, keyword: '', tag: '', minAmount: '', maxAmount: '', reimbursable: false })

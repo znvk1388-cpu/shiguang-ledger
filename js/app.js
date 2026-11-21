@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.20.1'
+  const VERSION = '1.21.0'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -729,8 +729,14 @@ window.App = (function () {
       state.month = m
     } else if (state.scope === 'year') {
       state.year += delta
+    } else {
+      return
     }
-    refresh()
+    /* 用户主动翻月/翻年：渲染完成后给一次 140ms 的透明度反馈，与切页动效同一套语言 */
+    Promise.resolve(refresh()).then(() => {
+      const content = $('#content')
+      if (content && typeof UI.animateFeedback === 'function') UI.animateFeedback(content, 'replace')
+    }).catch(() => { /* 原有错误界面保持可用 */ })
   }
 
   /* ---------- 登录 ---------- */
