@@ -7,7 +7,7 @@ window.App = (function () {
   const $$ = UI.$$
 
   const now = new Date()
-  const VERSION = '1.21.0'
+  const VERSION = '1.22.0'
   const state = {
     /* 运行容器：true 表示页面被微信小程序的 <web-view> 承载。
        小程序的 web-view 里没有地址栏、PWA 安装无意义、OAuth 跳转会被拦截，
@@ -757,6 +757,20 @@ window.App = (function () {
     if (window.__sgBootClear) window.__sgBootClear()
     $('#authView').classList.add('hidden')
     $('#mainView').classList.remove('hidden')
+    scheduleDailySnapshot()
+  }
+
+  /* 每天首次进入主界面后，空闲时留一份本机快照（仅游客模式，见 js/snapshot.js）。
+     走 later() 的空闲回调，不与首屏渲染抢主线程；失败一律静默。 */
+  let snapshotScheduled = false
+  function scheduleDailySnapshot() {
+    if (snapshotScheduled) return
+    snapshotScheduled = true
+    later(() => {
+      try {
+        if (window.Lazy && Lazy.need) Lazy.need('snapshot').then(m => m && m.maybeDaily()).catch(() => {})
+      } catch (e) { /* 快照是保险，不能反过来影响记账 */ }
+    }, 6000)
   }
 
   let sendTimer = null
@@ -1118,13 +1132,21 @@ window.App = (function () {
     window.addEventListener('error', e => {
       if (!e || !e.message) return
       if (/ResizeObserver|Script error/i.test(e.message)) return
+      /* 本机留一笔排障记录（不含账目内容），「意见反馈」可一键附带 */
+      if (window.Diag) Diag.logError('error', e.message, (e.filename || '') + (e.lineno ? ':' + e.lineno : ''))
       const h = humanError(e.message)
       UI.toast(h || '出了点小状况，操作没有完成')
     })
     window.addEventListener('unhandledrejection', e => {
       const m = (e && e.reason && (e.reason.message || e.reason)) || ''
       if (/abort|AbortError/i.test(String(m))) return
-      if (String(m)) UI.toast(humanError(m) || '操作未完成，请重试')
+      if (String(m)) {
+        if (window.Diag) {
+          const stack = e.reason && e.reason.stack ? String(e.reason.stack).split('\n') : []
+          Diag.logError('rejection', m, stack[1] ? stack[1].trim() : '')
+        }
+        UI.toast(humanError(m) || '操作未完成，请重试')
+      }
     })
     window.addEventListener('offline', () => UI.toast('网络已断开，已加载的页面仍可使用'))
     window.addEventListener('online', () => UI.toast('网络已恢复'))

@@ -890,11 +890,83 @@ window.Vault = (function () {
     if (b) b.addEventListener('click', () => { U().closeSheet(); openLocalSheet() })
   }
 
+  /* 本机自动快照（v1.22.0）：每天的「后悔药」——列清单、立即留一份、一键回到某天。
+     回滚前会自动再留一份「回滚前」快照（在 js/snapshot.js 里做），选错也能回到现在。 */
+  function snapTimeLabel(r) {
+    const d = new Date(r.at)
+    if (isNaN(d.getTime())) return String(r.day || '')
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+    return (r.day === window.Snapshot.dayKey() ? '今天 ' : (d.getMonth() + 1) + '月' + d.getDate() + '日 ') + hm
+  }
+  function snapReasonLabel(reason) {
+    return reason === 'manual' ? '手动留存' : reason === 'pre-restore' ? '回滚前留底' : '每日自动'
+  }
+  async function openSnapshots() {
+    const isGuest = S().mode === 'guest'
+    U().openSheet(
+      '<div class="sheet-head"><span class="sheet-title">本机自动快照</span><button type="button" id="snClose" class="btn sm line">关闭</button></div>' +
+      '<div class="card"><div class="small muted">每天首次打开 App 时，自动把账本（不含凭证图片）在本机留一份，保留最近 14 份。' +
+      '误删、改错分类、恢复了不对的备份，都可以回到某一天。</div></div>' +
+      '<div id="snBody"><div class="card"><div class="small muted" style="text-align:center;padding:8px 0">正在读取…</div></div></div>' +
+      '<button type="button" class="btn line block" id="snNow" style="margin-top:10px">立即留一份</button>'
+    )
+    const c = document.getElementById('snClose')
+    if (c) c.addEventListener('click', U().closeSheet)
+    const body = document.getElementById('snBody')
+    const nowBtn = document.getElementById('snNow')
+    if (!isGuest) {
+      if (body) body.innerHTML = '<div class="card callout callout--warn"><div class="callout-title">登录状态下不使用本机快照</div>' +
+        '<div class="small muted">数据的主副本在云端，请用「加密备份到云端」留存；本机快照只对本机账本有意义。</div></div>'
+      if (nowBtn) nowBtn.classList.add('hidden')
+      return
+    }
+    const mod = await Lazy.need('snapshot')
+    if (!mod || !document.getElementById('snBody')) return
+    const render = async () => {
+      const box = document.getElementById('snBody')
+      if (!box) return
+      let rows
+      try { rows = await mod.list() } catch (e) { box.innerHTML = '<div class="card callout callout--warn"><div class="callout-title">快照库暂时读不到</div><div class="small muted">请关闭面板后重试；账目本身不受影响。</div></div>'; return }
+      if (!rows.length) {
+        box.innerHTML = '<div class="card"><div class="small muted">还没有快照。点下方「立即留一份」，或明天打开 App 时会自动留第一份。</div></div>'
+        return
+      }
+      box.innerHTML = '<div class="card" style="padding:0">' + rows.map(r =>
+        '<div class="list-item"><span class="grow"><span>' + esc(snapTimeLabel(r)) + '</span>' +
+        '<span class="small muted">' + Number(r.count || 0) + ' 笔账目 · ' + snapReasonLabel(r.reason) + '</span></span>' +
+        '<button type="button" class="btn sm line" data-sn-restore="' + esc(r.id) + '">回到这天</button></div>').join('') + '</div>'
+      box.querySelectorAll('[data-sn-restore]').forEach(b => b.addEventListener('click', () => restoreSnapshot(mod, b.getAttribute('data-sn-restore'), render)))
+    }
+    if (nowBtn) nowBtn.addEventListener('click', async () => {
+      nowBtn.disabled = true
+      try {
+        const res = await mod.capture('manual')
+        if (res.ok) { U().toast('已留一份快照（' + res.count + ' 笔）', { icon: ic('check') }); await render() }
+        else if (res.reason === 'empty') U().toast('账本还是空的，记一笔之后再留快照')
+        else U().toast('快照没有保存成功，请稍后重试')
+      } catch (e) { U().toast('快照没有保存成功，请稍后重试') } finally { nowBtn.disabled = false }
+    })
+    await render()
+  }
+  async function restoreSnapshot(mod, id, render) {
+    const ok = await U().confirmSheet({ title: '回到这一天的账本', danger: true, okText: '回滚',
+      body: '当前账本会先自动留一份「回滚前」快照，然后整体替换为所选那天的账目；凭证图片不受影响。确定回滚？' })
+    if (!ok) return
+    try {
+      const r = await mod.restore(id)
+      U().closeSheet(true)
+      U().toast('已回到所选日期（' + r.txns + ' 笔）；回滚前的账本已另留一份快照', { icon: ic('check') })
+      if (window.App && window.App.refresh) window.App.refresh()
+    } catch (e) {
+      U().toast('回滚没有完成：' + (e && e.message ? e.message : '请稍后重试'))
+    }
+  }
+
   return {
     cryptoOk, deriveKey, encryptSnapshot, decryptSnapshot,
     status, backup, listBackups, open, restore, remove,
     exportLocal, restoreLocal, lastLocalBackup, statusCardHtml, addrHtml,
-    openCenter, openLocalSheet, openSyncHub, replayOnboard, MIN_PASS, ITER,
+    openCenter, openLocalSheet, openSyncHub, replayOnboard, openSnapshots, restoreSnapshot, MIN_PASS, ITER,
   }
 })()
 

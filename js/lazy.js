@@ -31,6 +31,7 @@
     manage: 'js/manage.js',
     papaparse: 'js/vendor/papaparse.min.js',
     csv: 'js/csv.js',
+    snapshot: 'js/snapshot.js',
   }
   const GLOBAL = {
     smart: 'Smart',
@@ -51,6 +52,7 @@
     manage: 'Manage',
     papaparse: 'Papa',
     csv: 'LedgerCsv',
+    snapshot: 'Snapshot',
   }
   const cache = {}
 

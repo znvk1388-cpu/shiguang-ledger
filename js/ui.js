@@ -2733,6 +2733,7 @@ window.UI = (function () {
         it('syncHubBtn', isGuest ? '' + ic('smartphone') + '' : '' + ic('cloud') + '', '账号与同步', isGuest ? '数据只在本机 · 登录可跨设备同步' : '数据已绑账号 · 换设备前请确认同步完成'),
         it('syncBtn', '' + ic('refresh') + '', '数据与同步', '连接状态 · 待上传 · 冲突检查', 'syncSub'),
         it('backupBtn', '' + ic('database') + '', 'JSON 备份 / 恢复', '查看备份范围并导出'),
+        it('snapBtn', '' + ic('clock') + '', '本机自动快照', '每天自动留一份，误删可回滚', '', '›', 'snapLabel'),
         it('vaultBtn', '' + ic('lock') + '', '加密备份到云端', '口令加密后上传，服务端只存密文'),
         it('localEncBtn', '' + ic('database') + '', '导出加密文件到本机', '不经过服务器，最保险的一招'),
         it('exportBtn', '' + ic('upload') + '', '导出 CSV', '含全部明细，可用 Excel 打开'),
@@ -2749,6 +2750,7 @@ window.UI = (function () {
       ]) +
       grpFold('帮助与关于', [
         it('helpBtn', '' + ic('book') + '', '新手指引 · 使用帮助', '3 分钟上手，含快捷键与常见问题'),
+        it('feedbackBtn', '' + ic('send') + '', '意见反馈', '问题 · 建议 · 激活遇到问题'),
         it('privacyBtn2', '' + ic('shield') + '', '用户隐私保护指引', '我们收集什么、怎么用、你有哪些权利'),
         it('aboutBtn', '' + ic('info') + '', '关于拾光记账', '版本 · 数据与隐私说明', 'aboutSub'),
       ]) +
@@ -2845,6 +2847,10 @@ window.UI = (function () {
     $('#trashBtn').addEventListener('click', openTrash)
     $('#reportBtn').addEventListener('click', openMonthReport)
     $('#backupBtn').addEventListener('click', openBackupSheet)
+    const snb = $('#snapBtn')
+    if (snb) snb.addEventListener('click', () => Lazy.need('vault').then(m => m && m.openSnapshots()))
+    const snl = $('#snapLabel')
+    if (snl) snl.innerHTML = (window.DB && window.DB.mode === 'guest') ? '已开启' : '本机模式'
     const sr = $('#smartRulesBtn')
     if (sr) sr.addEventListener('click', () => Lazy.need('smart').then(m => m && m.openRuleManager()))
     const ai = $('#aiBtn')
@@ -2870,6 +2876,8 @@ window.UI = (function () {
     if (lb) lb.addEventListener('click', openLockSettings)
     const hb = $('#helpBtn')
     if (hb) hb.addEventListener('click', openHelp)
+    const fbb = $('#feedbackBtn')
+    if (fbb) fbb.addEventListener('click', () => Lazy.need('legal').then(m => m && m.openFeedback()))
     const ib = $('#installBtn')
     if (ib) {
       /* 小程序 web-view 里没有「添加到主屏幕」这回事。P1-5 重排我的页时
@@ -4589,6 +4597,7 @@ window.UI = (function () {
   function openHelp() { return Lazy.need('legal').then(m => m && m.openHelp()) }
   function openInstallGuide() { return Lazy.need('legal').then(m => m && m.openInstallGuide()) }
   function openAbout() { return Lazy.need('legal').then(m => m && m.openAbout()) }
+  function openFeedback() { return Lazy.need('legal').then(m => m && m.openFeedback()) }
 
   /* ---------- 账号与同步 / 首次引导（转发到懒加载模块）----------
      这三个界面不常用但很重要，代码放懒加载的 vault.js，避免顶破首屏 150KB 硬线。 */
@@ -4647,7 +4656,7 @@ window.UI = (function () {
     openFxSettings, invalidateReimb,
     importCsvText, parseCsvText, commitRows, openImportPreview, budgetExecCard, openMonthBudget, openLockSettings,
     openHelp, openInstallGuide, openAbout, openDemoData,
-    openPrivacy, openTerms, needConsent, markConsent,
+    openPrivacy, openTerms, needConsent, markConsent, openFeedback,
     openSyncHub, replayOnboard, exportCsv, noSpendStats,
     haptic, hapticsOn, tabPop, countUp, openHapticSettings,
     collectOverlays, applyOverlays, backupImportWarning,

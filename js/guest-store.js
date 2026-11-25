@@ -888,6 +888,26 @@ window.GuestStore = (function () {
     return { txns: (data.transactions || []).length }
   }
 
+  /* 快照回滚（v1.22.0，见 js/snapshot.js）：只替换账本核心表，凭证图片原样保留。
+     清理顺序与 JSON 恢复完全一致——事务缓存、附件缓存、对象 URL、重载状态，一个都不能少，
+     否则回滚后列表会继续吐旧数据。 */
+  async function restoreCore(map, options) {
+    if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error('快照数据格式不正确')
+    const table = {}
+    for (const t of ['books', 'accounts', 'categories', 'budgets', 'recurring', 'goals', 'templates', 'transactions']) {
+      if (!Array.isArray(map[t])) throw new Error('快照缺少数据表：' + t)
+      table[t] = map[t]
+    }
+    if (options && options.isActive && !options.isActive()) throw new Error('回滚期间账本已切换，原数据未改动')
+    await idb.replaceAll(table)
+    invalidateTxnCache()
+    invalidateAttCache()
+    urlCache.forEach(url => { try { URL.revokeObjectURL(url) } catch (e) { /* 忽略 */ } })
+    urlCache.clear()
+    await init()
+    return { txns: table.transactions.length }
+  }
+
   return {
     state, init, seedPresets, sourceId,
     accounts, allAccounts, accountName, categoryName, category, rootCategories, childCategories, listAllAttachments, uploadFile,
@@ -901,7 +921,7 @@ window.GuestStore = (function () {
     books, activeBookId, currentBookId, defaultBookId, setActiveBook, bookName,
     addBook, renameBook, deleteBook, ensureDefaultBook,
     listGoals, addGoal, updateGoal, deleteGoal, goalDeposit,
-    dump, hasData, wipe, backup, restore,
+    dump, hasData, wipe, backup, restore, restoreCore,
   }
 })()
 

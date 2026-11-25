@@ -301,10 +301,74 @@
     if (c) c.addEventListener('click', closeSheet)
   }
 
+  /* ---------- 意见反馈（v1.22.0） ----------
+     问题描述 + 可选诊断信息（版本/环境/模式/Pro 状态/最近错误），
+     一键复制发给邮箱。诊断信息不含任何账目内容；
+     激活码本身不要发给客服——凭订单号补发即可。 */
+  function feedbackText(note, withDiag) {
+    const env = window.Env || {}
+    const lines = ['【拾光记账 反馈】',
+      '问题描述：' + (String(note || '').trim() || '（未填写）')]
+    if (withDiag) {
+      lines.push('', '--- 诊断信息（不含账目内容）---')
+      lines.push('版本：v' + ((window.App && window.App.version) || '—'))
+      lines.push('运行环境：' + (env.containerName ? env.containerName() : '浏览器'))
+      lines.push('数据模式：' + (window.DB && window.DB.mode === 'guest' ? '本机' : '云端'))
+      lines.push('拾光 Pro：' + (window.License && window.License.isPro() ? '已激活' : '未激活'))
+      lines.push('最近错误：')
+      lines.push(window.Diag ? window.Diag.summary(5) : '（无）')
+    }
+    return lines.join('\n')
+  }
+  function copyFeedback(text, btn) {
+    const done = () => toast('已复制，粘贴到微信/邮件发给客服即可', { icon: ic('check') })
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => copyFallback(text, done))
+    } else copyFallback(text, done)
+  }
+  function copyFallback(text, done) {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'; ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      done()
+    } catch (e) { toast('复制失败，请长按文本手动复制') }
+  }
+  function openFeedback() {
+    openSheet(
+      '<div class="sheet-head"><span class="sheet-title">意见反馈</span><button type="button" id="fbClose" class="btn sm line">关闭</button></div>' +
+      '<div class="card"><textarea id="fbNote" rows="4" placeholder="遇到什么问题 / 有什么建议？（不用写账目内容）" aria-label="问题描述" style="resize:vertical;width:100%"></textarea>' +
+      '<label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="fbDiag" checked> 附带诊断信息（版本、环境、最近错误；不含账目内容）</label>' +
+      '<div id="fbPreview" class="tiny muted" style="margin-top:10px;white-space:pre-wrap;max-height:150px;overflow:auto;background:var(--bg);border-radius:8px;padding:8px"></div></div>' +
+      '<div class="row" style="gap:8px;margin-top:10px"><button type="button" class="btn grow" id="fbCopy">复制反馈内容</button>' +
+      '<button type="button" class="btn line grow" id="fbMail">发邮件</button></div>' +
+      '<p class="hint">邮箱：' + esc(CONTACT_TEXT) + ' · 激活问题请附购买订单号，不要发激活码本身</p>'
+    )
+    const note = $('#fbNote'), diag = $('#fbDiag'), preview = $('#fbPreview')
+    const refreshPreview = () => { if (preview) preview.textContent = feedbackText(note ? note.value : '', diag ? diag.checked : true) }
+    if (note) note.addEventListener('input', refreshPreview)
+    if (diag) diag.addEventListener('change', refreshPreview)
+    refreshPreview()
+    const c = $('#fbClose')
+    if (c) c.addEventListener('click', closeSheet)
+    const cp = $('#fbCopy')
+    if (cp) cp.addEventListener('click', () => copyFeedback(feedbackText(note ? note.value : '', diag ? diag.checked : true), cp))
+    const mail = $('#fbMail')
+    if (mail) mail.addEventListener('click', () => {
+      const text = feedbackText(note ? note.value : '', diag ? diag.checked : true)
+      const subject = '拾光记账 反馈 v' + ((window.App && window.App.version) || '')
+      try { window.location.href = 'mailto:' + CONTACT_TEXT.replace(/[\s<>()]/g, '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(text.slice(0, 1800)) } catch (e) { /* 忽略 */ }
+    })
+  }
 
   window.Legal = {
     privacyHtml, termsHtml, openPrivacy, openTerms,
-    openHelp, openInstallGuide, openAbout,
+    openHelp, openInstallGuide, openAbout, openFeedback,
+    feedbackText,
   }
 })()
 
